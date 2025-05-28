@@ -191,14 +191,19 @@ trait Notification
     
     /**
      * Create a standardized error response
+     *
+     * @param string $statusCode
+     * @param string $message
+     * @param int $httpCode
+     * @return array
      */
-    protected function errorResponse(string $message, int $code, array $context = []): array
+    public function errorResponse(string $statusCode, string $message = '', int $httpCode = 500): array
     {
         return [
-            'status' => 'error',
-            'message' => $message,
-            'code' => $code,
-            'context' => $context
+            'timestamp' => now(),
+            'status' => false,
+            'statusCode' => $statusCode,
+            'message' => $message
         ];
     }
     
