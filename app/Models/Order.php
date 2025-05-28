@@ -541,10 +541,20 @@ class Order extends Model
 		return $this->belongsTo(Table::class)->withTrashed();
 	}
 
-	public function user(): BelongsTo
-	{
-		return $this->belongsTo(User::class)->withTrashed();
-	}
+    public function user(): BelongsTo
+    {
+        return $this->belongsTo(User::class);
+    }
+    
+    /**
+     * Get all trips associated with the order.
+     */
+    public function trips()
+    {
+        return $this->belongsToMany(Trip::class, 'order_trips')
+            ->withPivot(['sequence', 'status'])
+            ->withTimestamps();
+    }
 
 	public function pointHistory(): HasOne
 	{
