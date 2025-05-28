@@ -100,14 +100,9 @@ class LoginController extends Controller
 
             // Format the response to match frontend expectations
             $response = [
-                'timestamp' => now(),
-                'status' => true,
-                'message' => __('errors.' . ResponseError::SUCCESS, locale: $this->language),
-                'data' => [
-                    'access_token'  => $token,
-                    'token_type'    => 'Bearer',
-                    'user'          => UserResource::make($user->loadMissing(['shop', 'model'])),
-                ]
+                'access_token'  => $token,
+                'token_type'    => 'Bearer',
+                'user'          => UserResource::make($user->loadMissing(['shop', 'model'])),
             ];
 
             \Log::debug('Login response', ['response' => $response]);
@@ -211,14 +206,9 @@ class LoginController extends Controller
 
             // Format the response to match frontend expectations
             $response = [
-                'timestamp' => now(),
-                'status' => true,
-                'message' => 'User successfully logged in',
-                'data' => [
-                    'access_token'  => $token,
-                    'token_type'    => 'Bearer',
-                    'user'          => UserResource::make($user->loadMissing(['shop', 'model'])),
-                ]
+                'access_token'  => $token,
+                'token_type'    => 'Bearer',
+                'user'          => UserResource::make($user->loadMissing(['shop', 'model'])),
             ];
 
             \Log::debug('Phone login response', ['response' => $response]);
