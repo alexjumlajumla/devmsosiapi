@@ -36,6 +36,9 @@ return [
         'https://msosi.jumlajumla.com',
         'https://mapi.jumlajumla.com',
         'https://madmin.jumlajumla.com',
+        'https://beta.jumlajumla.com',
+        'https://devdash.jumlajumla.com',
+        'https://dev.jumlajumla.com',
         'http://localhost:3000',
         'http://localhost:8000' // For local API development
     ],

@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Events\OrderStatusUpdated;
 use App\Helpers\Utility;
 use App\Models\Booking\Table;
 use App\Traits\Loadable;
@@ -20,6 +21,7 @@ use Illuminate\Database\Eloquent\Relations\MorphMany;
 use Illuminate\Database\Eloquent\Relations\MorphOne;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Event;
 
 /**
  * App\Models\Order
@@ -139,230 +141,260 @@ use Illuminate\Support\Facades\Schema;
  */
 class Order extends Model
 {
-	use HasFactory, Payable, Reviewable, Loadable;
+    use HasFactory, Payable, Reviewable, Loadable;
 
-	protected $guarded = ['id'];
+    protected $guarded = ['id'];
 
-	protected $casts = [
-		'location' => 'array',
-		'address'  => 'array',
-	];
+    protected $casts = [
+        'location' => 'array',
+        'address'  => 'array',
+    ];
+    
+    /**
+     * The "booted" method of the model.
+     *
+     * @return void
+     */
+    protected static function booted()
+    {
+        static::updated(function ($order) {
+            // Check if status was changed
+            if ($order->isDirty('status')) {
+                $oldStatus = $order->getOriginal('status');
+                $newStatus = $order->status;
+                
+                // Only dispatch event if status actually changed
+                if ($oldStatus !== $newStatus) {
+                    // Get the reason if this is a cancellation
+                    $reason = ($newStatus === self::STATUS_CANCELED) 
+                        ? $order->cancel_reason ?? 'No reason provided' 
+                        : null;
+                        
+                    // Dispatch the event
+                    Event::dispatch(new OrderStatusUpdated(
+                        $order,
+                        $oldStatus,
+                        $newStatus,
+                        $reason
+                    ));
+                }
+            }
+        });
+    }
 
-	const STATUS_NEW        = 'new';
-	const STATUS_ACCEPTED   = 'accepted';
-	const STATUS_PROCESSING = 'processing';   // For kitchen processing
-	const STATUS_COOKING    = 'cooking';      // Alias for processing
-	const STATUS_READY      = 'ready';        // Ready for pickup/delivery
-	const STATUS_SHIPPED    = 'shipped';      // Order has been shipped
-	const STATUS_ON_A_WAY   = 'on_a_way';    // For delivery in progress
-	const STATUS_DELIVERED  = 'delivered';    // Final delivery status
-	const STATUS_CANCELED   = 'canceled';
+    const STATUS_NEW        = 'new';
+    const STATUS_ACCEPTED   = 'accepted';
+    const STATUS_PROCESSING = 'processing';   // For kitchen processing
+    const STATUS_COOKING    = 'cooking';      // Alias for processing
+    const STATUS_READY      = 'ready';        // Ready for pickup/delivery
+    const STATUS_SHIPPED    = 'shipped';      // Order has been shipped
+    const STATUS_ON_A_WAY   = 'on_a_way';    // For delivery in progress
+    const STATUS_DELIVERED  = 'delivered';    // Final delivery status
+    const STATUS_CANCELED   = 'canceled';
 
-	const STATUSES = [
-		self::STATUS_NEW        => self::STATUS_NEW,
-		self::STATUS_ACCEPTED   => self::STATUS_ACCEPTED,
-		self::STATUS_PROCESSING => self::STATUS_PROCESSING,
-		self::STATUS_COOKING    => self::STATUS_COOKING,    
-		self::STATUS_READY      => self::STATUS_READY,
-		self::STATUS_SHIPPED    => self::STATUS_SHIPPED,
-		self::STATUS_ON_A_WAY   => self::STATUS_ON_A_WAY,
-		self::STATUS_DELIVERED  => self::STATUS_DELIVERED,
-		self::STATUS_CANCELED   => self::STATUS_CANCELED,
-	];
+    const STATUSES = [
+        self::STATUS_NEW        => self::STATUS_NEW,
+        self::STATUS_ACCEPTED   => self::STATUS_ACCEPTED,
+        self::STATUS_PROCESSING => self::STATUS_PROCESSING,
+        self::STATUS_COOKING    => self::STATUS_COOKING,    
+        self::STATUS_READY      => self::STATUS_READY,
+        self::STATUS_SHIPPED    => self::STATUS_SHIPPED,
+        self::STATUS_ON_A_WAY   => self::STATUS_ON_A_WAY,
+        self::STATUS_DELIVERED  => self::STATUS_DELIVERED,
+        self::STATUS_CANCELED   => self::STATUS_CANCELED,
+    ];
 
-	const COOKER_STATUSES = [
-		self::STATUS_ACCEPTED   => self::STATUS_ACCEPTED,
-		self::STATUS_PROCESSING => self::STATUS_PROCESSING,
-		self::STATUS_COOKING    => self::STATUS_COOKING,
-		self::STATUS_READY      => self::STATUS_READY,
-		self::STATUS_CANCELED   => self::STATUS_CANCELED
-	];
+    const COOKER_STATUSES = [
+        self::STATUS_ACCEPTED   => self::STATUS_ACCEPTED,
+        self::STATUS_PROCESSING => self::STATUS_PROCESSING,
+        self::STATUS_COOKING    => self::STATUS_COOKING,
+        self::STATUS_READY      => self::STATUS_READY,
+        self::STATUS_CANCELED   => self::STATUS_CANCELED
+    ];
 
-	// Helper method to check if status is processing/cooking
-	public function isProcessing(): bool 
-	{
-		return in_array($this->status, [
-			self::STATUS_PROCESSING,
-			self::STATUS_COOKING
-		]);
-	}
+    // Helper method to check if status is processing/cooking
+    public function isProcessing(): bool 
+    {
+        return in_array($this->status, [
+            self::STATUS_PROCESSING,
+            self::STATUS_COOKING
+        ]);
+    }
 
-	// Helper method to check if order is being delivered
-	public function isDelivering(): bool
-	{
-		return $this->status === self::STATUS_ON_A_WAY;
-	}
+    // Helper method to check if order is being delivered
+    public function isDelivering(): bool
+    {
+        return $this->status === self::STATUS_ON_A_WAY;
+    }
 
-	// Helper method to check if order is shipped or in delivery
-	public function isShippedOrDelivering(): bool
-	{
-		return in_array($this->status, [
-			self::STATUS_SHIPPED,
-			self::STATUS_ON_A_WAY
-		]);
-	}
+    // Helper method to check if order is shipped or in delivery
+    public function isShippedOrDelivering(): bool
+    {
+        return in_array($this->status, [
+            self::STATUS_SHIPPED,
+            self::STATUS_ON_A_WAY
+        ]);
+    }
 
-	const PICKUP    = 'pickup';
-	const DELIVERY  = 'delivery';
-	const POINT     = 'point';
-	const DINE_IN   = 'dine_in';
-	const KIOSK     = 'kiosk';
+    const PICKUP    = 'pickup';
+    const DELIVERY  = 'delivery';
+    const POINT     = 'point';
+    const DINE_IN   = 'dine_in';
+    const KIOSK     = 'kiosk';
 
-	const DELIVERY_TYPES = [
-		self::PICKUP   => self::PICKUP,
-		self::DELIVERY => self::DELIVERY,
-		self::POINT    => self::POINT,
-		self::DINE_IN  => self::DINE_IN,
-		self::KIOSK    => self::KIOSK,
-	];
+    const DELIVERY_TYPES = [
+        self::PICKUP   => self::PICKUP,
+        self::DELIVERY => self::DELIVERY,
+        self::POINT    => self::POINT,
+        self::DINE_IN  => self::DINE_IN,
+        self::KIOSK    => self::KIOSK,
+    ];
 
-	const SHOP   = 'shop';
-	const DRIVER = 'driver';
-	const WAITER = 'waiter';
-	const SYSTEM = 'system';
+    const SHOP   = 'shop';
+    const DRIVER = 'driver';
+    const WAITER = 'waiter';
+    const SYSTEM = 'system';
 
-	const TIP_FOR = [
-		self::SHOP   => self::SHOP,
-		self::DRIVER => self::DRIVER,
-		self::WAITER => self::WAITER,
-		self::SYSTEM => self::SYSTEM,
-	];
+    const TIP_FOR = [
+        self::SHOP   => self::SHOP,
+        self::DRIVER => self::DRIVER,
+        self::WAITER => self::WAITER,
+        self::SYSTEM => self::SYSTEM,
+    ];
 
-	public function getTipForAttribute(?string $value): array
-	{
-		return $value ? explode(',', $value) : [];
-	}
+    public function getTipForAttribute(?string $value): array
+    {
+        return $value ? explode(',', $value) : [];
+    }
 
-	public function getOriginPriceAttribute(): float|int
-	{
-		return $this->rate_total_price + $this->rate_total_discount - $this->rate_tax - $this->rate_delivery_fee - $this->rate_service_fee + $this->rate_coupon_price - $this->rate_tips;
-	}
+    public function getOriginPriceAttribute(): float|int
+    {
+        return $this->rate_total_price + $this->rate_total_discount - $this->rate_tax - $this->rate_delivery_fee - $this->rate_service_fee + $this->rate_coupon_price - $this->rate_tips;
+    }
 
-	public function getSellerFeeAttribute(): float|int
-	{
-		return $this->rate_total_price - $this->rate_delivery_fee - $this->rate_service_fee - $this->rate_commission_fee - $this->rate_coupon_price - $this->rate_point_histories_sum_price + $this->rate_shop_tip;
-	}
+    public function getSellerFeeAttribute(): float|int
+    {
+        return $this->rate_total_price - $this->rate_delivery_fee - $this->rate_service_fee - $this->rate_commission_fee - $this->rate_coupon_price - $this->rate_point_histories_sum_price + $this->rate_shop_tip;
+    }
 
-	public function getCouponPriceAttribute(): float|int
-	{
-		$couponPrice = 0;
+    public function getCouponPriceAttribute(): float|int
+    {
+        $couponPrice = 0;
 
-		if ($this->relationLoaded('coupon')) {
+        if ($this->relationLoaded('coupon')) {
+            $couponPrice = $this->coupon?->price ?? 0;
+        }
 
-			$couponPrice = $this->coupon?->price ?? 0;
+        return $couponPrice;
+    }
 
-		}
+    public function getRateCouponPriceAttribute(): float|int
+    {
+        if (request()->is('api/v1/dashboard/user/*') || request()->is('api/v1/rest/*')) {
+            return $this->coupon_price * ($this->rate <= 0 ? 1 : $this->rate);
+        }
 
-		return $couponPrice;
-	}
+        return $this->coupon_price;
+    }
 
-	public function getRateCouponPriceAttribute(): float|int
-	{
-		if (request()->is('api/v1/dashboard/user/*') || request()->is('api/v1/rest/*')) {
-			return $this->coupon_price * ($this->rate <= 0 ? 1 : $this->rate);
-		}
+    public function getShopTipAttribute(): float|int
+    {
+        if ($this->rate_tips > 0 && in_array(self::SHOP, $this->tip_for)) {
+            return $this->rate_tips / count($this->tip_for);
+        }
 
-		return $this->coupon_price;
-	}
+        return 0;
+    }
 
-	public function getShopTipAttribute(): float|int
-	{
-		if ($this->rate_tips > 0 && in_array(self::SHOP, $this->tip_for)) {
-			return $this->rate_tips / count($this->tip_for);
-		}
+    public function getRateShopTipAttribute(): float|int
+    {
+        if (request()->is('api/v1/dashboard/user/*') || request()->is('api/v1/rest/*')) {
+            return $this->shop_tip * ($this->rate <= 0 ? 1 : $this->rate);
+        }
 
-		return 0;
-	}
+        return $this->shop_tip;
+    }
 
-	public function getRateShopTipAttribute(): float|int
-	{
-		if (request()->is('api/v1/dashboard/user/*') || request()->is('api/v1/rest/*')) {
-			return $this->shop_tip * ($this->rate <= 0 ? 1 : $this->rate);
-		}
+    public function getDriverTipAttribute(): float|int
+    {
+        if ($this->rate_tips > 0 && in_array(self::DRIVER, $this->tip_for)) {
+            return $this->rate_tips / count($this->tip_for);
+        }
 
-		return $this->shop_tip;
-	}
+        return 0;
+    }
 
-	public function getDriverTipAttribute(): float|int
-	{
-		if ($this->rate_tips > 0 && in_array(self::DRIVER, $this->tip_for)) {
-			return $this->rate_tips / count($this->tip_for);
-		}
+    public function getRateDriverTipAttribute(): float|int
+    {
+        if (request()->is('api/v1/dashboard/user/*') || request()->is('api/v1/rest/*')) {
+            return $this->driver_tip * ($this->rate <= 0 ? 1 : $this->rate);
+        }
 
-		return 0;
-	}
+        return $this->driver_tip;
+    }
 
-	public function getRateDriverTipAttribute(): float|int
-	{
-		if (request()->is('api/v1/dashboard/user/*') || request()->is('api/v1/rest/*')) {
-			return $this->driver_tip * ($this->rate <= 0 ? 1 : $this->rate);
-		}
+    public function getWaiterTipAttribute(): float|int
+    {
+        if ($this->rate_tips > 0 && in_array(self::WAITER, $this->tip_for)) {
+            return $this->rate_tips / count($this->tip_for);
+        }
 
-		return $this->driver_tip;
-	}
+        return 0;
+    }
 
-	public function getWaiterTipAttribute(): float|int
-	{
-		if ($this->rate_tips > 0 && in_array(self::WAITER, $this->tip_for)) {
-			return $this->rate_tips / count($this->tip_for);
-		}
+    public function getRateWaiterTipAttribute(): float|int
+    {
+        if (request()->is('api/v1/dashboard/user/*') || request()->is('api/v1/rest/*')) {
+            return $this->waiter_tip * ($this->rate <= 0 ? 1 : $this->rate);
+        }
 
-		return 0;
-	}
+        return $this->waiter_tip;
+    }
 
-	public function getRateWaiterTipAttribute(): float|int
-	{
-		if (request()->is('api/v1/dashboard/user/*') || request()->is('api/v1/rest/*')) {
-			return $this->waiter_tip * ($this->rate <= 0 ? 1 : $this->rate);
-		}
+    public function getSystemTipAttribute(): float|int
+    {
+        if ($this->rate_tips > 0 && in_array(self::SYSTEM, $this->tip_for)) {
+            return $this->rate_tips / count($this->tip_for);
+        }
 
-		return $this->waiter_tip;
-	}
+        return 0;
+    }
 
-	public function getSystemTipAttribute(): float|int
-	{
-		if ($this->rate_tips > 0 && in_array(self::SYSTEM, $this->tip_for)) {
-			return $this->rate_tips / count($this->tip_for);
-		}
+    public function getRateSystemTipAttribute(): float|int
+    {
+        if (request()->is('api/v1/dashboard/user/*') || request()->is('api/v1/rest/*')) {
+            return $this->system_tip * ($this->rate <= 0 ? 1 : $this->rate);
+        }
 
-		return 0;
-	}
+        return $this->system_tip;
+    }
 
-	public function getRateSystemTipAttribute(): float|int
-	{
-		if (request()->is('api/v1/dashboard/user/*') || request()->is('api/v1/rest/*')) {
-			return $this->system_tip * ($this->rate <= 0 ? 1 : $this->rate);
-		}
+    public function getRateTotalPriceAttribute(): ?float
+    {
+        if (request()->is('api/v1/dashboard/user/*') || request()->is('api/v1/rest/*')) {
+            return $this->total_price * ($this->rate <= 0 ? 1 : $this->rate);
+        }
 
-		return $this->system_tip;
-	}
+        return $this->total_price;
+    }
 
-	public function getRateTotalPriceAttribute(): ?float
-	{
-		if (request()->is('api/v1/dashboard/user/*') || request()->is('api/v1/rest/*')) {
-			return $this->total_price * ($this->rate <= 0 ? 1 : $this->rate);
-		}
+    public function getRateTipsAttribute(): ?float
+    {
+        if (request()->is('api/v1/dashboard/user/*') || request()->is('api/v1/rest/*')) {
+            return $this->tips * ($this->rate <= 0 ? 1 : $this->rate);
+        }
 
-		return $this->total_price;
-	}
+        return $this->tips;
+    }
 
-	public function getRateTipsAttribute(): ?float
-	{
-		if (request()->is('api/v1/dashboard/user/*') || request()->is('api/v1/rest/*')) {
-			return $this->tips * ($this->rate <= 0 ? 1 : $this->rate);
-		}
+    public function getRateCouponSumPriceAttribute(): ?float
+    {
+        if (request()->is('api/v1/dashboard/user/*') || request()->is('api/v1/rest/*')) {
+            return $this->coupon_sum_price * ($this->rate <= 0 ? 1 : $this->rate);
+        }
 
-		return $this->tips;
-	}
-
-	public function getRateCouponSumPriceAttribute(): ?float
-	{
-		if (request()->is('api/v1/dashboard/user/*') || request()->is('api/v1/rest/*')) {
-			return $this->coupon_sum_price * ($this->rate <= 0 ? 1 : $this->rate);
-		}
-
-		return $this->coupon_sum_price;
-	}
+        return $this->coupon_sum_price;
+    }
 
 	public function getRatePointHistorySumPriceAttribute(): ?float
 	{

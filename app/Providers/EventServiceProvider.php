@@ -49,6 +49,9 @@ class EventServiceProvider extends ServiceProvider
         EmailSendByTemplate::class => [
             EmailSendByTemplateListener::class,
         ],
+        \App\Events\OrderStatusUpdated::class => [
+            \App\Listeners\SendOrderStatusNotification::class,
+        ],
     ];
 
     /**
