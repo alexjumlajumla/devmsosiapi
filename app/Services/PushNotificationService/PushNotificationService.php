@@ -76,34 +76,79 @@ class PushNotificationService extends CoreService
     }
 
     /**
-     * @param array $data
-     * @param array $userIds
-     * @return bool
+     * Store multiple notifications for multiple users
+     * 
+     * @param array $data Notification data
+     * @param array $userIds Array of user IDs to send notifications to
+     * @return bool True if successful, false otherwise
      */
     public function storeMany(array $data, array $userIds): bool
     {
-        $chunks = array_chunk($userIds, 2);
-
-        foreach ($chunks as $chunk) {
-
-            foreach ($chunk as $userId) {
-
-                $newData = is_array(data_get($data, 'data')) ? $data['data'] : [data_get($data, 'data')];
-
-                $data['user_id'] = $userId;
-                $data['data']    = $newData;
-
-                try {
-                    $this->model()->create($data);
-                } catch (Throwable $e) {
-                    $this->error($e);
-                }
-
-            }
-
+        if (empty($userIds)) {
+            Log::warning('PushNotificationService: No user IDs provided for notification', [
+                'notification_data' => $data
+            ]);
+            return false;
         }
 
-        return true;
+        Log::info('PushNotificationService: Storing notifications for users', [
+            'user_count' => count($userIds),
+            'notification_type' => $data['type'] ?? 'unknown',
+            'title' => $data['title'] ?? null,
+            'body' => $data['body'] ?? null,
+        ]);
+
+        $chunks = array_chunk($userIds, 2); // Process in chunks of 2 to avoid memory issues
+        $successCount = 0;
+        $errorCount = 0;
+
+        foreach ($chunks as $chunkIndex => $chunk) {
+            foreach ($chunk as $userId) {
+                try {
+                    $notificationData = $data; // Create a copy to avoid modifying the original
+                    $notificationData['data'] = is_array(data_get($data, 'data')) 
+                        ? $data['data'] 
+                        : [data_get($data, 'data')];
+                    
+                    $notificationData['user_id'] = $userId;
+
+                    Log::debug('PushNotificationService: Creating notification', [
+                        'user_id' => $userId,
+                        'type' => $notificationData['type'] ?? 'unknown',
+                        'title' => $notificationData['title'] ?? null,
+                    ]);
+
+                    $this->model()->create($notificationData);
+                    $successCount++;
+
+                } catch (\Throwable $e) {
+                    $errorCount++;
+                    Log::error('PushNotificationService: Failed to create notification', [
+                        'user_id' => $userId,
+                        'error' => $e->getMessage(),
+                        'trace' => $e->getTraceAsString()
+                    ]);
+                    
+                    // Continue with other users even if one fails
+                    continue;
+                }
+            }
+        }
+
+
+        if ($errorCount > 0) {
+            Log::error('PushNotificationService: Completed with errors', [
+                'total_users' => count($userIds),
+                'successful' => $successCount,
+                'failed' => $errorCount
+            ]);
+        } else {
+            Log::info('PushNotificationService: Successfully stored all notifications', [
+                'total_users' => $successCount
+            ]);
+        }
+
+        return $errorCount === 0;
     }
 
     /**

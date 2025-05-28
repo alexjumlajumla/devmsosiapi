@@ -158,6 +158,13 @@ class Order extends Model
     protected static function booted()
     {
         static::updated(function ($order) {
+            // Log all updates to the order for debugging
+            \Log::debug('Order updated', [
+                'order_id' => $order->id,
+                'dirty' => $order->getDirty(),
+                'original' => $order->getOriginal()
+            ]);
+            
             // Check if status was changed
             if ($order->isDirty('status')) {
                 $oldStatus = $order->getOriginal('status');
@@ -185,14 +192,28 @@ class Order extends Model
                         'new_status' => $newStatus,
                         'reason' => $reason
                     ]);
+                    
+                    try {
+                        // Dispatch the event
+                        $event = new OrderStatusUpdated(
+                            $order,
+                            $oldStatus,
+                            $newStatus,
+                            $reason
+                        );
                         
-                    // Dispatch the event
-                    Event::dispatch(new OrderStatusUpdated(
-                        $order,
-                        $oldStatus,
-                        $newStatus,
-                        $reason
-                    ));
+                        Event::dispatch($event);
+                        \Log::info('OrderStatusUpdated event dispatched successfully', [
+                            'order_id' => $order->id,
+                            'event' => get_class($event)
+                        ]);
+                    } catch (\Exception $e) {
+                        \Log::error('Failed to dispatch OrderStatusUpdated event', [
+                            'order_id' => $order->id,
+                            'error' => $e->getMessage(),
+                            'trace' => $e->getTraceAsString()
+                        ]);
+                    }
                 }
             }
         });

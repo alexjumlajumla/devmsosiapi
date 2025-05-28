@@ -33,37 +33,64 @@ class SendOrderStatusNotification implements ShouldQueue
      */
     public function handle(OrderStatusUpdated $event)
     {
-        Log::info('SendOrderStatusNotification: Handling order status update', [
+        // Log the start of the handler
+        Log::info('SendOrderStatusNotification: Starting to handle order status update', [
             'order_id' => $event->order->id,
             'old_status' => $event->oldStatus,
             'new_status' => $event->newStatus,
             'reason' => $event->reason,
             'queue' => $this->queue,
-            'attempts' => $this->attempts()
+            'attempts' => $this->attempts(),
+            'job_id' => $this->job ? $this->job->getJobId() : 'sync',
+            'connection' => $this->connection ?? config('queue.default')
         ]);
 
         try {
-            $this->notificationService->sendOrderStatusUpdate(
+            // Log before calling the notification service
+            Log::debug('SendOrderStatusNotification: Calling notification service', [
+                'order_id' => $event->order->id,
+                'service_class' => get_class($this->notificationService)
+            ]);
+            
+            // Send the notification
+            $result = $this->notificationService->sendOrderStatusUpdate(
                 $event->order,
                 $event->newStatus,
                 $event->reason
             );
             
-            Log::info('SendOrderStatusNotification: Successfully processed notification', [
-                'order_id' => $event->order->id,
-                'status' => $event->newStatus
-            ]);
+            // Log the result
+            if ($result) {
+                Log::info('SendOrderStatusNotification: Notification sent successfully', [
+                    'order_id' => $event->order->id,
+                    'status' => $event->newStatus,
+                    'notification_id' => $result->id ?? 'unknown',
+                    'notification_type' => get_class($result)
+                ]);
+            } else {
+                Log::warning('SendOrderStatusNotification: Notification service returned null', [
+                    'order_id' => $event->order->id,
+                    'status' => $event->newStatus
+                ]);
+            }
+            
+            return $result;
             
         } catch (\Exception $e) {
-            Log::error('SendOrderStatusNotification: Failed to send order status notification', [
+            $errorContext = [
                 'order_id' => $event->order->id,
-                'status' => $event->newStatus,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-                'attempts' => $this->attempts()
-            ]);
+                'error' => [
+                    'message' => $e->getMessage(),
+                    'code' => $e->getCode(),
+                    'file' => $e->getFile(),
+                    'line' => $e->getLine(),
+                ],
+                'trace' => $e->getTraceAsString()
+            ];
             
-            // Retry the job later (Laravel will handle the retry logic)
+            Log::error('SendOrderStatusNotification: Failed to send notification', $errorContext);
+            
+            // Re-throw to allow job retries if configured
             throw $e;
         }
     }

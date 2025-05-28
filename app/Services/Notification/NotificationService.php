@@ -24,11 +24,32 @@ class NotificationService
      */
     public function sendToUser(User $user, string $title, string $message, string $type = 'info', array $data = []): ?PushNotification
     {
+        $logContext = [
+            'user_id' => $user->id,
+            'title' => $title,
+            'message' => $message,
+            'type' => $type,
+            'has_data' => !empty($data)
+        ];
+        
+        Log::info('NotificationService: Starting to send notification to user', $logContext);
+        
         DB::beginTransaction();
 
         try {
             // Check if user has FCM tokens
+            Log::debug('NotificationService: Getting FCM tokens for user', ['user_id' => $user->id]);
+            
             $tokens = $this->firebaseTokenService->getUserTokens($user->id);
+            
+            Log::debug('NotificationService: Retrieved FCM tokens', [
+                'user_id' => $user->id,
+                'token_count' => is_array($tokens) ? count($tokens) : 0,
+                'tokens' => $tokens ? array_map(function($t) { 
+                    return substr($t, 0, 10) . '...' . substr($t, -5); 
+                }, $tokens) : []
+            ]);
+            
             if (empty($tokens)) {
                 $this->logNoTokens($user);
                 return null;
@@ -169,21 +190,40 @@ class NotificationService
      */
     public function sendOrderStatusUpdate($order, string $status, ?string $reason = null): ?PushNotification
     {
-        Log::info('NotificationService: Sending order status update', [
+        Log::info('NotificationService: Starting order status update', [
             'order_id' => $order->id,
             'status' => $status,
-            'reason' => $reason
+            'reason' => $reason,
+            'order_class' => get_class($order),
+            'order_data' => [
+                'user_id' => $order->user_id,
+                'status' => $order->status,
+                'delivery_type' => $order->delivery_type ?? 'unknown',
+            ]
         ]);
+        
+        // Load user relationship if not already loaded
+        if (!$order->relationLoaded('user')) {
+            $order->load('user');
+        }
         
         $user = $order->user;
         
         if (!$user) {
-            Log::warning('Cannot send order status update: order has no user', [
+            $errorMessage = 'Cannot send order status update: order has no user';
+            Log::error($errorMessage, [
                 'order_id' => $order->id,
-                'status' => $status
+                'status' => $status,
+                'order_user_id' => $order->user_id
             ]);
             return null;
         }
+        
+        Log::debug('NotificationService: Found user for order', [
+            'user_id' => $user->id,
+            'user_email' => $user->email,
+            'user_phone' => $user->phone
+        ]);
 
         $statusTitles = [
             'new' => 'New Order #' . $order->id,
@@ -221,50 +261,51 @@ class NotificationService
             $data['cancellation_reason'] = $reason;
         }
 
-    if ($status === 'delivered' && $order->delivery_rating_enabled) {
-        $data['rating_enabled'] = true;
-    }
-
-    Log::info('NotificationService: Sending notification to user', [
-        'order_id' => $order->id,
-        'user_id' => $user->id,
-        'title' => $title,
-        'message' => $message,
-        'status' => $status,
-        'data' => $data
-    ]);
-
-    try {
-        $notification = $this->sendToUser(
-            $user,
-            $title,
-            $message,
-            'order_' . $status,
-            $data
-        );
-
-        if ($notification) {
-            Log::info('NotificationService: Notification sent successfully', [
-                'notification_id' => $notification->id ?? 'unknown',
-                'order_id' => $order->id,
-                'status' => $status
-            ]);
-        } else {
-            Log::error('NotificationService: Failed to send notification', [
-                'order_id' => $order->id,
-                'status' => $status,
-                'user_id' => $user->id
-            ]);
+        if ($status === 'delivered' && $order->delivery_rating_enabled) {
+            $data['rating_enabled'] = true;
         }
 
-        return $notification;
-    } catch (\Exception $e) {
-        Log::error('NotificationService: Exception while sending notification', [
+        Log::info('NotificationService: Sending notification to user', [
             'order_id' => $order->id,
+            'user_id' => $user->id,
+            'title' => $title,
+            'message' => $message,
             'status' => $status,
-            'error' => $e->getMessage(),
-            'trace' => $e->getTraceAsString()
+            'data' => $data
         ]);
-        throw $e;
+
+        try {
+            $notification = $this->sendToUser(
+                $user,
+                $title,
+                $message,
+                'order_' . $status,
+                $data
+            );
+
+            if ($notification) {
+                Log::info('NotificationService: Notification sent successfully', [
+                    'notification_id' => $notification->id ?? 'unknown',
+                    'order_id' => $order->id,
+                    'status' => $status
+                ]);
+            } else {
+                Log::error('NotificationService: Failed to send notification', [
+                    'order_id' => $order->id,
+                    'status' => $status,
+                    'user_id' => $user->id
+                ]);
+            }
+
+            return $notification;
+        } catch (\Exception $e) {
+            Log::error('NotificationService: Exception while sending notification', [
+                'order_id' => $order->id,
+                'status' => $status,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            throw $e;
+        }
     }
 }

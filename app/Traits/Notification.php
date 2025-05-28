@@ -20,217 +20,190 @@ use Log;
  */
 trait Notification
 {
-	public function sendNotification1(
-		array   $receivers = [],
-		?string $message = '',
-		?string $title = null,
-		mixed   $data = [],
-		array   $userIds = [],
-		?string $firebaseTitle = '',
-	): void
-	{
-		dispatch(function () use ($receivers, $message, $title, $data, $userIds, $firebaseTitle) {
-			if (empty($receivers)) {
-				return;
-			}
-
-			\Log::info('[PushService] Notification Data', [
-				'receivers' => $receivers,
-				'title' => $title,
-				'message' => $message,
-				'data' => $data,
-				'userIds' => $userIds,
-				'firebaseTitle' => $firebaseTitle
-			]);
 
 
-			$type = data_get($data, 'order.type');
+    /**
+     * Send push notification to specified FCM tokens and optionally store in database
+     * 
+     * @param array $receivers Array of FCM tokens to send the notification to
+     * @param string|null $message The notification message
+     * @param string|null $title The notification title
+     * @param mixed $data Additional data to send with the notification
+     * @param array $userIds Array of user IDs to store the notification for
+     * @param string|null $firebaseTitle Optional title for Firebase notification
+     * @return void
+     */
+    public function sendNotification(
+        array   $receivers = [],
+        ?string $message = '',
+        ?string $title = null,
+        mixed   $data = [],
+        array   $userIds = [],
+        ?string $firebaseTitle = '',
+    ): void {
+        dispatch(function () use ($receivers, $message, $title, $data, $userIds, $firebaseTitle) {
+            $logContext = [
+                'receivers_count' => is_array($receivers) ? count($receivers) : 0,
+                'title' => $title,
+                'message' => $message,
+                'data_type' => gettype($data),
+                'user_ids_count' => is_array($userIds) ? count($userIds) : 0,
+                'firebase_title' => $firebaseTitle
+            ];
 
-			if (is_array($userIds) && count($userIds) > 0) {
-				\Log::info('[PushService] Storing Notification for Users', [
-					'userIds' => $userIds,
-					'type' => $type ?? data_get($data, 'type'),
-					'title' => $title,
-					'message' => $message,
-					'data' => $data
-				]);
-				(new PushNotificationService)->storeMany([
-					'type' 	=> $type ?? data_get($data, 'type'),
-					'title' => $title,
-					'body' 	=> $message,
-					'data' 	=> $data,
-					'sound' => 'default',
-				], $userIds);
-			}
+            try {
+                Log::info('Sending push notification', $logContext);
 
-			$url = "https://fcm.googleapis.com/v1/projects/{$this->projectId()}/messages:send";
+                if (empty($receivers)) {
+                    Log::warning('No FCM tokens provided to send notification to');
+                    return;
+                }
 
-			$token = $this->updateToken();
+                // Store notification in database if user IDs are provided
+                if (is_array($userIds) && count($userIds) > 0) {
+                    $notificationType = data_get($data, 'order.type', data_get($data, 'type', 'general'));
+                    
+                    Log::debug('Storing notification in database', [
+                        'user_ids' => $userIds,
+                        'type' => $notificationType,
+                        'title' => $title,
+                        'message' => $message
+                    ]);
+                    
+                    try {
+                        (new PushNotificationService)->storeMany([
+                            'type' => $notificationType,
+                            'title' => $title,
+                            'body' => $message,
+                            'data' => $data,
+                            'sound' => 'default',
+                        ], $userIds);
+                        
+                        Log::info('Successfully stored notification in database', [
+                            'user_count' => count($userIds)
+                        ]);
+                        
+                    } catch (\Throwable $e) {
+                        Log::error('Failed to store notification in database', [
+                            'error' => $e->getMessage(),
+                            'trace' => $e->getTraceAsString(),
+                            'user_ids' => $userIds
+                        ]);
+                        // Continue with FCM send even if DB storage fails
+                    }
+                }
 
-			\Log::info('[PushService] Sending Notification to FCM 111', [
-				'url' => $url,
-				'token' => $token
-			]);
+                // Prepare FCM request
+                $projectId = $this->projectId();
+                $url = "https://fcm.googleapis.com/v1/projects/{$projectId}/messages:send";
 
-			$headers = [
-				'Authorization' => "Bearer $token",
-				'Content-Type'  => 'application/json'
-			];
+                Log::debug('Preparing FCM request', [
+                    'url' => $url,
+                    'project_id' => $projectId,
+                    'receivers_count' => is_array($receivers) ? count($receivers) : 0
+                ]);
 
-			foreach ($receivers as $receiver) {
-				\Log::info('[PushService] inside', [
-					'receiver' => $receiver,
-					'firebaseTitle' => $firebaseTitle ?? $title,
-					'message' => $message,
-					'data' => [
-						'id' => (string)($data['id'] ?? ''),
-						'status' => (string)($data['status'] ?? ''),
-						'type' => (string)($data['type'] ?? '')
-					]
-				]);
-				Http::withHeaders($headers)->post($url, [ // $request =
-					'message' => [
-						'token' => $receiver,
-						'notification' => [
-							'title' => $firebaseTitle ?? $title,
-							'body' 	=> $message,
-						],
-						'data' => [
-							'id'     => (string)($data['id'] 	 ?? ''),
-							'status' => (string)($data['status'] ?? ''),
-							'type'   => (string)($data['type'] 	 ?? '')
-						],
-						'android' => [
-							'notification' => [
-								'sound' => 'default',
-							]
-						],
-						'apns' => [
-							'payload' => [
-								'aps' => [
-									'sound' => 'default'
-								]
-							]
-						]
-					]
-				]);
-			}
+                $token = $this->updateToken();
+                if (empty($token)) {
+                    throw new \RuntimeException('Failed to get FCM access token');
+                }
+                $headers = [
+                    'Authorization' => "Bearer $token",
+                    'Content-Type'  => 'application/json'
+                ];
 
-		})->afterResponse();
-	}
+                $successCount = 0;
+                $errorCount = 0;
 
+                foreach ($receivers as $receiver) {
+                    try {
+                        if (empty($receiver)) {
+                            Log::warning('Empty FCM token encountered, skipping');
+                            continue;
+                        }
 
-	public function sendNotification(
-		array   $receivers = [],
-		?string $message = '',
-		?string $title = null,
-		mixed   $data = [],
-		array   $userIds = [],
-		?string $firebaseTitle = '',
-	): void
-	{
-		dispatch(function () use ($receivers, $message, $title, $data, $userIds, $firebaseTitle) {
-			if (empty($receivers)) {
-				return;
-			}
+                        Log::debug('Sending FCM notification', [
+                            'receiver' => substr($receiver, 0, 10) . '...' . substr($receiver, -5),
+                            'title' => $firebaseTitle ?? $title,
+                            'message' => $message,
+                            'data' => [
+                                'id' => (string)($data['id'] ?? ''),
+                                'status' => (string)($data['status'] ?? ''),
+                                'type' => (string)($data['type'] ?? '')
+                            ]
+                        ]);
+
+                        // Send notification to FCM
+                        $response = Http::withHeaders($headers)->post($url, [
+                            'message' => [
+                                'token' => $receiver,
+                                'notification' => [
+                                    'title' => $firebaseTitle ?? $title,
+                                    'body'  => $message,
+                                ],
+                                'data' => [
+                                    'id'     => (string)($data['id'] ?? ''),
+                                    'status' => (string)($data['status'] ?? ''),
+                                    'type'   => (string)($data['type'] ?? '')
+                                ],
+                                'android' => [
+                                    'notification' => [
+                                        'sound' => 'default',
+                                    ]
+                                ],
+                                'apns' => [
+                                    'payload' => [
+                                        'aps' => [
+                                            'sound' => 'default'
+                                        ]
+                                    ]
+                                ]
+                            ]
+                        ]);
+
+                        Log::debug('FCM response received', [
+                            'receiver' => substr($receiver, 0, 10) . '...' . substr($receiver, -5),
+                            'status' => $response->status(),
+                            'body' => $response->body()
+                        ]);
+
+                        if ($response->successful()) {
+                            $successCount++;
+                        } else {
+                            $errorCount++;
+                            Log::error('FCM API returned error', [
+                                'status' => $response->status(),
+                                'body' => $response->body(),
+                                'receiver' => substr($receiver, 0, 10) . '...' . substr($receiver, -5)
+                            ]);
+                        }
+
+                    } catch (\Throwable $e) {
+                        $errorCount++;
+                        Log::error('Error sending FCM notification', [
+                            'error' => $e->getMessage(),
+                            'trace' => $e->getTraceAsString(),
+                            'receiver' => isset($receiver) ? substr($receiver, 0, 10) . '...' . substr($receiver, -5) : 'null'
+                        ]);
+                    }
+                }
+
+                Log::info('FCM notification batch completed', [
+                    'total' => count($receivers),
+                    'successful' => $successCount,
+                    'failed' => $errorCount
+                ]);
+
+            } catch (\Throwable $e) {
+                Log::error('Error in sendNotification job', [
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString()
+                ]);
+                throw $e; // Re-throw to allow job retries if configured
+            }
+        })->afterResponse();
+    }
 	
-			\Log::info('11111 first data', [
-				'receivers' => $receivers,
-				'title' => $title,
-				'message' => $message,
-				'data' => $data,
-				'userIds' => $userIds,
-				'firebaseTitle' => $firebaseTitle
-			]);
-	
-			$type = data_get($data, 'order.type');
-	
-			if (is_array($userIds) && count($userIds) > 0) {
-				\Log::info('22222222', [
-					'userIds' => $userIds,
-					'type' => $type ?? data_get($data, 'type'),
-					'title' => $title,
-					'message' => $message,
-					'data' => $data
-				]);
-				(new PushNotificationService)->storeMany([
-					'type' 	=> $type ?? data_get($data, 'type'),
-					'title' => $title,
-					'body' 	=> $message,
-					'data' 	=> $data,
-					'sound' => 'default',
-				], $userIds);
-			}
-	
-			$url = "https://fcm.googleapis.com/v1/projects/{$this->projectId()}/messages:send";
-	
-			$token = $this->updateToken();
-	
-			\Log::info('[PushService 3333333', [
-				'url' => $url,
-				'token' => $token
-			]);
-	
-			$headers = [
-				'Authorization' => "Bearer $token",
-				'Content-Type'  => 'application/json'
-			];
-	
-			foreach ($receivers as $receiver) {
-				\Log::info('[PushService] inside for loop 44444', [
-					'receiver' => $receiver,
-					'firebaseTitle' => $firebaseTitle ?? $title,
-					'message' => $message,
-					'data' => [
-						'id' => (string)($data['id'] ?? ''),
-						'status' => (string)($data['status'] ?? ''),
-						'type' => (string)($data['type'] ?? '')
-					]
-				]);
-	
-				// Store response from Firebase
-				$response = Http::withHeaders($headers)->post($url, [
-					'message' => [
-						'token' => $receiver,
-						'notification' => [
-							'title' => $firebaseTitle ?? $title,
-							'body' 	=> $message,
-						],
-						'data' => [
-							'id'     => (string)($data['id'] 	 ?? ''),
-							'status' => (string)($data['status'] ?? ''),
-							'type'   => (string)($data['type'] 	 ?? '')
-						],
-						'android' => [
-							'notification' => [
-								'sound' => 'default',
-							]
-						],
-						'apns' => [
-							'payload' => [
-								'aps' => [
-									'sound' => 'default'
-								]
-							]
-						]
-					]
-				]);
-	
-				// Log the response
-				\Log::info('[PushService] 5555555', [
-					'receiver' => $receiver,
-					'status' => $response->status(),
-					'body' => $response->body()
-				]);
-			}
-	
-		})->afterResponse();
-	}
-	
-
-
-
-
 	public function sendAllNotification(?string $title = null, mixed $data = [], ?string $firebaseTitle = ''): void
 	{
 		dispatch(function () use ($title, $data, $firebaseTitle) {
