@@ -12,6 +12,13 @@ class SendOrderStatusNotification implements ShouldQueue
 {
     use InteractsWithQueue;
 
+    /**
+     * The name of the queue the job should be sent to.
+     *
+     * @var string
+     */
+    public $queue = 'notifications';
+
     protected $notificationService;
 
     /**
@@ -34,16 +41,18 @@ class SendOrderStatusNotification implements ShouldQueue
     public function handle(OrderStatusUpdated $event)
     {
         // Log the start of the handler
-        Log::info('SendOrderStatusNotification: Starting to handle order status update', [
+        $logContext = [
             'order_id' => $event->order->id,
-            'old_status' => $event->oldStatus,
-            'new_status' => $event->newStatus,
-            'reason' => $event->reason,
-            'queue' => $this->queue,
-            'attempts' => $this->attempts(),
-            'job_id' => $this->job ? $this->job->getJobId() : 'sync',
+            'old_status' => $event->oldStatus ?? null,
+            'new_status' => $event->newStatus ?? null,
+            'reason' => $event->reason ?? null,
+            'queue' => $this->queue ?? 'default',
+            'attempts' => method_exists($this, 'attempts') ? $this->attempts() : 0,
+            'job_id' => isset($this->job) ? $this->job->getJobId() : 'sync',
             'connection' => $this->connection ?? config('queue.default')
-        ]);
+        ];
+        
+        Log::info('SendOrderStatusNotification: Starting to handle order status update', $logContext);
 
         try {
             // Log before calling the notification service

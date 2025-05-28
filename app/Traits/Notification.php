@@ -360,25 +360,6 @@ trait Notification
     }
     
     /**
-     * Get FCM tokens for user IDs
-     * 
-     * @param array $userIds
-     * @return array
-     */
-    protected function getTokensForUserIds(array $userIds): array
-    {
-        try {
-            $users = User::whereIn('id', $userIds)
-                ->whereNotNull('firebase_token')
-                ->where('firebase_token', '!=', '[]')
-                ->get(['id', 'firebase_token']);
-                
-            $tokens = [];
-            
-            foreach ($users as $user) {
-                $userTokens = $user->getFcmTokens();
-                $tokens = array_merge($tokens, $userTokens);
-            }
             
             return array_unique($tokens);
             

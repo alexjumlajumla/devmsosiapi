@@ -22,6 +22,16 @@ class NotificationService
     /**
      * Send notification to a single user
      */
+    /**
+     * Send a notification to a single user
+     * 
+     * @param User $user The user to send the notification to
+     * @param string $title The notification title
+     * @param string $message The notification message
+     * @param string $type The notification type (default: 'info')
+     * @param array $data Additional data to include with the notification
+     * @return PushNotification|null The created notification or null if failed
+     */
     public function sendToUser(User $user, string $title, string $message, string $type = 'info', array $data = []): ?PushNotification
     {
         $logContext = [
@@ -87,7 +97,10 @@ class NotificationService
                     $notificationData,
                     [$user->id],
                     $title,
-                    $data,
+                    [
+                        'title' => $title,
+                        'body' => $message,
+                    ],
                     $title // firebaseTitle
                 );
 
@@ -173,11 +186,46 @@ class NotificationService
     /**
      * Get user's unread notifications count
      */
+    /**
+     * Get count of unread notifications for a user
+     * 
+     * @param int $userId The user ID
+     * @return int Number of unread notifications
+     */
     public function getUnreadCount(int $userId): int
     {
         return PushNotification::where('user_id', $userId)
             ->where('status', '!=', PushNotification::STATUS_READ)
             ->count();
+    }
+    
+    /**
+     * Log when no FCM tokens are found for a user
+     * 
+     * @param User $user The user with no FCM tokens
+     * @return void
+     */
+    protected function logNoTokens(User $user): void
+    {
+        $logContext = [
+            'user_id' => $user->id,
+            'email' => $user->email,
+            'phone' => $user->phone,
+            'has_firebase_token' => !empty($user->firebase_token),
+            'firebase_token_type' => $user->firebase_token ? gettype($user->firebase_token) : null,
+        ];
+        
+        if (is_array($user->firebase_token)) {
+            $logContext['token_count'] = count($user->firebase_token);
+            $logContext['token_sample'] = !empty($user->firebase_token) 
+                ? substr(json_encode($user->firebase_token[0] ?? ''), 0, 50) . '...' 
+                : null;
+        } elseif (is_string($user->firebase_token)) {
+            $logContext['token_length'] = strlen($user->firebase_token);
+            $logContext['token_prefix'] = substr($user->firebase_token, 0, 10) . '...';
+        }
+        
+        Log::warning('No valid FCM tokens found for user', $logContext);
     }
 
     /**
