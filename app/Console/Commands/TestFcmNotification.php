@@ -183,8 +183,8 @@ class TestFcmNotification extends Command
         $this->info("Testing batch notifications...");
         
         // Get first 3 users with tokens for testing
-        $users = User::whereNotNull('fcm_tokens')
-            ->where('fcm_tokens', '!=', '[]')
+        $users = User::whereNotNull('firebase_token')
+            ->where('firebase_token', '!=', '[]')
             ->take(3)
             ->get();
             
@@ -197,7 +197,7 @@ class TestFcmNotification extends Command
         $userIds = [];
         
         foreach ($users as $user) {
-            $userTokens = $user->fcm_tokens ?? [];
+            $userTokens = $user->firebase_token ?? [];
             $tokens = array_merge($tokens, $userTokens);
             $userIds[] = $user->id;
             $this->info("Including user: {$user->email} (ID: {$user->id}) with " . count($userTokens) . " token(s)");
@@ -234,9 +234,9 @@ class TestFcmNotification extends Command
      */
     protected function listUsersWithTokens()
     {
-        $users = User::whereNotNull('fcm_tokens')
-            ->where('fcm_tokens', '!=', '[]')
-            ->get(['id', 'email', 'fcm_tokens']);
+        $users = User::whereNotNull('firebase_token')
+            ->where('firebase_token', '!=', '[]')
+            ->get(['id', 'email', 'firebase_token']);
             
         if ($users->isEmpty()) {
             $this->info("No users with FCM tokens found.");
@@ -247,7 +247,7 @@ class TestFcmNotification extends Command
         $rows = [];
         
         foreach ($users as $user) {
-            $tokenCount = is_array($user->fcm_tokens) ? count($user->fcm_tokens) : 0;
+            $tokenCount = is_array($user->firebase_token) ? count($user->firebase_token) : 0;
             $rows[] = [
                 $user->id,
                 $user->email,
