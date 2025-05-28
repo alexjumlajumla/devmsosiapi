@@ -75,20 +75,20 @@ class TestNotificationSystem extends Command
         $unreadCount = $notificationService->getUnreadCount($user->id);
         $this->info("\nUnread notifications: {$unreadCount}");
         
-        // List recent notifications with better formatting
-        $this->info("\nRecent notifications (newest first):");
-        $notifications = $user->notifications()
+        // List recent push notifications with better formatting
+        $this->info("\nRecent push notifications (newest first):");
+        $notifications = PushNotification::where('user_id', $user->id)
             ->latest()
             ->limit(5)
             ->get()
-            ->map(function ($n) {
+            ->map(function ($notification) {
                 return [
-                    'ID' => $n->id,
-                    'Type' => $n->type ?: 'N/A',
-                    'Title' => $n->title ?: 'N/A',
-                    'Status' => $n->status ?: 'N/A',
-                    'Created' => $n->created_at->diffForHumans(),
-                    'Data' => json_encode($n->data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES),
+                    'ID' => $notification->id,
+                    'Type' => $notification->type ?: 'N/A',
+                    'Title' => $notification->title ?: 'N/A',
+                    'Status' => $notification->status ?: 'N/A',
+                    'Created' => $notification->created_at->diffForHumans(),
+                    'Data' => json_encode($notification->data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES),
                 ];
             });
             
@@ -98,20 +98,30 @@ class TestNotificationSystem extends Command
                 $notifications->toArray()
             );
         } else {
-            $this->info('No notifications found for this user.');
+            $this->info('No push notifications found for this user.');
         }
         
         // Show notification stats
         $stats = [
-            'Total' => $user->notifications()->count(),
-            'Unread' => $notificationService->getUnreadCount($user->id),
-            'Sent' => $user->notifications()->where('status', PushNotification::STATUS_SENT)->count(),
-            'Delivered' => $user->notifications()->where('status', PushNotification::STATUS_DELIVERED)->count(),
-            'Read' => $user->notifications()->where('status', PushNotification::STATUS_READ)->count(),
-            'Failed' => $user->notifications()->where('status', PushNotification::STATUS_FAILED)->count(),
+            'Total' => PushNotification::where('user_id', $user->id)->count(),
+            'Unread' => PushNotification::where('user_id', $user->id)
+                ->where('status', '!=', PushNotification::STATUS_READ)
+                ->count(),
+            'Sent' => PushNotification::where('user_id', $user->id)
+                ->where('status', PushNotification::STATUS_SENT)
+                ->count(),
+            'Delivered' => PushNotification::where('user_id', $user->id)
+                ->where('status', PushNotification::STATUS_DELIVERED)
+                ->count(),
+            'Read' => PushNotification::where('user_id', $user->id)
+                ->where('status', PushNotification::STATUS_READ)
+                ->count(),
+            'Failed' => PushNotification::where('user_id', $user->id)
+                ->where('status', PushNotification::STATUS_FAILED)
+                ->count(),
         ];
         
-        $this->info("\nNotification Statistics:");
+        $this->info("\nPush Notification Statistics:");
         $this->table(
             ['Metric', 'Count'],
             collect($stats)->map(function ($value, $key) {
