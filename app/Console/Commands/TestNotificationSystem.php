@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\User;
+use App\Models\PushNotification;
 use App\Services\Notification\NotificationService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
