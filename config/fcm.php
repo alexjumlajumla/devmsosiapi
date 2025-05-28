@@ -19,7 +19,7 @@ return [
     | The project ID from the Firebase Console.
     |
     */
-    'project_id' => env('FIREBASE_PROJECT_ID', env('GOOGLE_CLOUD_PROJECT_ID')),
+    'project_id' => env('FIREBASE_PROJECT_ID', 'msosijumla'),
 
     /*
     |--------------------------------------------------------------------------
@@ -29,7 +29,7 @@ return [
     | The server key from the Firebase Console.
     |
     */
-    'api_key' => env('FIREBASE_API_KEY'),
+    'api_key' => env('FIREBASE_API_KEY', 'AIzaSyAuIozMv5MEpT94ynxZMSDheuqcSFshXWU'),
 
     /*
     |--------------------------------------------------------------------------
@@ -39,16 +39,83 @@ return [
     | The sender ID from the Firebase Console.
     |
     */
-    'sender_id' => env('FIREBASE_SENDER_ID'),
-
+    'sender_id' => env('FIREBASE_SENDER_ID', '853837987746'),
+    'messaging_sender_id' => env('FIREBASE_MESSAGING_SENDER_ID', '853837987746'),
+    'app_id' => env('FIREBASE_APP_ID', '1:853837987746:web:b0d822859c3a2605893cfb'),
+    'measurement_id' => env('FIREBASE_MEASUREMENT_ID', 'G-YSYTD7ESL8'),
+    'vapid_key' => env('FIREBASE_VAPID_KEY', 'BDO1IfAhx1-yl1pn7DjkBZi3a0NCAoiPsQLDHSqLXoB5QBxEEmxCTqKQNzPdBYtQXSow5KJlrDzzfph8hSkrsxE'),
+    'auth_domain' => env('FIREBASE_AUTH_DOMAIN', 'msosijumla.firebaseapp.com'),
+    'storage_bucket' => env('FIREBASE_STORAGE_BUCKET', 'msosijumla.appspot.com'),
+    
     /*
     |--------------------------------------------------------------------------
-    | FCM Server Key
+    | FCM HTTP Protocol
     |--------------------------------------------------------------------------
     |
-    | The server key from the Firebase Console.
+    | The HTTP protocol to use for FCM API calls.
     |
     */
+    'http_protocol' => env('FIREBASE_HTTP_PROTOCOL', 'https'),
+    
+    /*
+    |--------------------------------------------------------------------------
+    | FCM HTTP Timeout
+    |--------------------------------------------------------------------------
+    |
+    | The timeout in seconds for HTTP requests to the FCM API.
+    |
+    */
+    'http_timeout' => env('FIREBASE_HTTP_TIMEOUT', 30),
+    
+    /*
+    |--------------------------------------------------------------------------
+    | FCM Default Channel
+    |--------------------------------------------------------------------------
+    |
+    | The default channel ID for notifications.
+    |
+    */
+    'default_channel_id' => env('FIREBASE_DEFAULT_CHANNEL_ID', 'fcm_default_channel'),
+    
+    /*
+    |--------------------------------------------------------------------------
+    | FCM Default Sound
+    |--------------------------------------------------------------------------
+    |
+    | The default sound for notifications.
+    |
+    */
+    'default_sound' => env('FIREBASE_DEFAULT_SOUND', 'default'),
+    
+    /*
+    |--------------------------------------------------------------------------
+    | FCM Default Notification Icon
+    |--------------------------------------------------------------------------
+    |
+    | The default notification icon for Android.
+    |
+    */
+    'default_notification_icon' => env('FIREBASE_DEFAULT_NOTIFICATION_ICON', 'notification_icon'),
+    
+    /*
+    |--------------------------------------------------------------------------
+    | FCM Default Notification Color
+    |--------------------------------------------------------------------------
+    |
+    | The default notification color for Android.
+    |
+    */
+    'default_notification_color' => env('FIREBASE_DEFAULT_NOTIFICATION_COLOR', '#FF0000'),
+    
+    /*
+    |--------------------------------------------------------------------------
+    | FCM Default Click Action
+    |--------------------------------------------------------------------------
+    |
+    | The default click action for notifications.
+    |
+    */
+    'default_click_action' => env('FIREBASE_DEFAULT_CLICK_ACTION', 'FLUTTER_NOTIFICATION_CLICK'),
     'server_key' => env('FIREBASE_SERVER_KEY'),
 
 

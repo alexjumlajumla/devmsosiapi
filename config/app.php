@@ -186,6 +186,8 @@ return [
 //        App\Providers\TelescopeServiceProvider::class,
         App\Providers\RepositoryProvider::class,
         App\Providers\LogServiceProvider::class,
+        App\Providers\FirebaseServiceProvider::class,
+        App\Providers\NotificationServiceProvider::class,
     ],
 
     /*

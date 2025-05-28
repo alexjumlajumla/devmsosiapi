@@ -146,31 +146,77 @@ class FcmChannel
     }
 
     /**
-     * Prepare the FCM message from the notification data
+     * Prepare the FCM message with proper configuration.
      *
-     * @param array $fcmMessage
+     * @param  mixed  $fcmMessage
+     * @return \Kreait\Firebase\Messaging\Message
+     */
+    protected function prepareMessage($fcmMessage)
+    {
+        if ($fcmMessage instanceof CloudMessage) {
+            return $this->applyDefaultConfig($fcmMessage);
+        }
+        
+        if (is_array($fcmMessage)) {
+            $message = CloudMessage::fromArray($fcmMessage);
+            
+            // Set default notification if not set
+            if (!isset($fcmMessage['notification'])) {
+                $message = $message->withNotification(FcmNotification::create(
+                    $fcmMessage['title'] ?? $this->config['default_title'] ?? 'New Notification',
+                    $fcmMessage['body'] ?? $this->config['default_body'] ?? 'You have a new notification'
+                ));
+            }
+            
+            return $this->applyDefaultConfig($message);
+        }
+        
+        throw new \InvalidArgumentException('Invalid FCM message format. Expected array or CloudMessage instance.');
+    }
+    
+    /**
+     * Apply default configuration to the message.
+     *
+     * @param  CloudMessage  $message
      * @return CloudMessage
      */
-    protected function prepareMessage(array $fcmMessage): CloudMessage
+    protected function applyDefaultConfig(CloudMessage $message): CloudMessage
     {
-        $message = CloudMessage::new();
+        // Apply Android config
+        $androidConfig = [
+            'priority' => $this->config['android_priority'] ?? 'high',
+            'ttl' => $this->config['android_ttl'] ?? '2419200s', // 28 days
+            'notification' => [
+                'channel_id' => $this->config['default_channel_id'] ?? 'fcm_default_channel',
+                'sound' => $this->config['default_sound'] ?? 'default',
+                'icon' => $this->config['default_notification_icon'] ?? 'notification_icon',
+                'color' => $this->config['default_notification_color'] ?? '#FF0000',
+                'click_action' => $this->config['default_click_action'] ?? 'FLUTTER_NOTIFICATION_CLICK',
+            ],
+        ];
         
-        // Set notification data if provided
-        if (isset($fcmMessage['notification'])) {
-            $message = $message->withNotification(
-                FcmNotification::fromArray($fcmMessage['notification'])
-            );
-        }
+        // Apply APNS (iOS) config
+        $apnsConfig = [
+            'headers' => [
+                'apns-priority' => $this->config['apns_priority'] ?? '10',
+                'apns-push-type' => $this->config['apns_push_type'] ?? 'alert',
+            ],
+            'payload' => [
+                'aps' => [
+                    'alert' => [
+                        'title' => $message->notification()?->title() ?? '',
+                        'body' => $message->notification()?->body() ?? '',
+                    ],
+                    'sound' => $this->config['default_sound'] ?? 'default',
+                    'badge' => 1,
+                    'mutable-content' => 1,
+                ],
+            ],
+        ];
         
-        // Set data payload if provided
-        if (isset($fcmMessage['data'])) {
-            $message = $message->withData($fcmMessage['data']);
-        }
-        
-        // Set Android config if provided
-        if (isset($fcmMessage['android'])) {
-            $message = $message->withAndroidConfig($fcmMessage['android']);
-        }
+        return $message
+            ->withAndroidConfig($androidConfig)
+            ->withApnsConfig($apnsConfig);
         
         // Set APNS config if provided
         if (isset($fcmMessage['apns'])) {

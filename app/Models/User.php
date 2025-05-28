@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Helpers\Utility;
 use App\Models\Booking\Table;
 use App\Traits\Activity;
+use App\Traits\HasNotifications;
 use App\Traits\Loadable;
 use App\Traits\RequestToModel;
 use Database\Factories\UserFactory;
@@ -167,7 +168,9 @@ class User extends Authenticatable implements MustVerifyEmail
         Loadable,
         Notifiable,
         RequestToModel,
-        SoftDeletes;
+        SoftDeletes,
+        Activity,
+        HasNotifications;
 
     const DATES = [
         'subMonth'  => 'subMonth',
