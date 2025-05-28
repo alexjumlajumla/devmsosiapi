@@ -85,12 +85,12 @@ trait Notification
                 if (empty($receivers)) {
                     $error = 'No FCM tokens found for the provided user IDs';
                     Log::warning($error, ['user_ids' => $userIds]);
-                    return $this->errorResponse($error, 404, $logContext);
+                    return $this->notificationErrorResponse($error, 'Not found', 404);
                 }
             } elseif (empty($receivers)) {
                 $error = 'No FCM tokens or user IDs provided';
                 Log::warning($error);
-                return $this->errorResponse($error, 400, $logContext);
+                return $this->notificationErrorResponse($error, 'Bad request', 400);
             }
 
             // Ensure receivers is an array of valid tokens
@@ -98,7 +98,7 @@ trait Notification
             if (empty($receivers)) {
                 $error = 'No valid FCM tokens provided after validation';
                 Log::warning($error);
-                return $this->errorResponse($error, 400, $logContext);
+                return $this->notificationErrorResponse($error, 'Bad request', 400);
             }
 
             // Store notification in database if user IDs are provided
@@ -138,10 +138,10 @@ trait Notification
                 );
             }
             
-            return $this->errorResponse(
-                'Failed to send notification: ' . $e->getMessage(),
+            return $this->notificationErrorResponse(
                 $e->getCode() ?: 500,
-                $errorContext
+                'Failed to send notification: ' . $e->getMessage(),
+                500
             );
         }
     }
@@ -190,14 +190,14 @@ trait Notification
     }
     
     /**
-     * Create a standardized error response
-     *
+     * Create a standardized error response for notifications
+     * 
      * @param string $statusCode
      * @param string $message
      * @param int $httpCode
      * @return array
      */
-    public function errorResponse(string $statusCode, string $message = '', int $httpCode = 500): array
+    protected function notificationErrorResponse(string $statusCode, string $message = '', int $httpCode = 500): array
     {
         return [
             'timestamp' => now(),
