@@ -239,9 +239,12 @@ class LoginController extends Controller
             /** @var PersonalAccessToken $current */
             $user = auth('sanctum')->user();
             
-            // Clear the firebase token on logout
-            $user->update([
-                'firebase_token' => null
+            // Clear all FCM tokens on logout
+            $user->clearFcmTokens();
+            $user->save();
+            
+            \Log::info('[FirebaseToken] All tokens cleared on logout', [
+                'user_id' => $user->id
             ]);
 
             try {
