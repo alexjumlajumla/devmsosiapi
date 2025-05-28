@@ -269,42 +269,86 @@ trait Notification
 		// return Cache::remember('firebase_auth_token', 300, fn() => $token);
 	}
 
-	public function newOrderNotification(Order $order): void
-	{
-		$adminFirebaseTokens = User::with(['roles' => fn($q) => $q->where('name', 'admin')])
-			->whereHas('roles', fn($q) => $q->where('name', 'admin'))
-			->whereNotNull('firebase_token')
-			->pluck('firebase_token', 'id')
-			->toArray();
+    public function newOrderNotification(Order $order): void
+    {
+        Log::info('Starting newOrderNotification', [
+            'order_id' => $order->id,
+            'shop_id' => $order->shop_id
+        ]);
 
-		$sellersFirebaseTokens = User::with([
-			'shop' => fn($q) => $q->where('id', $order->shop_id)
-		])
-			->whereHas('shop', fn($q) => $q->where('id', $order->shop_id))
-			->whereNotNull('firebase_token')
-			->pluck('firebase_token', 'id')
-			->toArray();
+        // Get admin tokens
+        $adminUsers = User::with(['roles' => fn($q) => $q->where('name', 'admin')])
+            ->whereHas('roles', fn($q) => $q->where('name', 'admin'))
+            ->whereNotNull('firebase_token')
+            ->get(['id', 'firebase_token']);
 
-		$aTokens = [];
-		$sTokens = [];
+        $adminFirebaseTokens = $adminUsers->pluck('firebase_token', 'id')->toArray();
 
-		foreach ($adminFirebaseTokens as $adminToken) {
-			$aTokens = array_merge($aTokens, is_array($adminToken) ? array_values($adminToken) : [$adminToken]);
-		}
+        Log::debug('Admin tokens fetched', [
+            'admin_count' => $adminUsers->count(),
+            'admin_ids' => $adminUsers->pluck('id')->toArray()
+        ]);
 
-		foreach ($sellersFirebaseTokens as $sellerToken) {
-			$sTokens = array_merge($sTokens, is_array($sellerToken) ? array_values($sellerToken) : [$sellerToken]);
-		}
+        // Get seller tokens for the specific shop
+        $sellerUsers = User::with([
+                'shop' => fn($q) => $q->where('id', $order->shop_id)
+            ])
+            ->whereHas('shop', fn($q) => $q->where('id', $order->shop_id))
+            ->whereNotNull('firebase_token')
+            ->get(['id', 'firebase_token']);
 
-		$this->sendNotification(
-			array_values(array_unique(array_merge($aTokens, $sTokens))),
-			__('errors.' . ResponseError::NEW_ORDER, ['id' => $order->id], $this->language),
+        $sellersFirebaseTokens = $sellerUsers->pluck('firebase_token', 'id')->toArray();
+
+        Log::debug('Seller tokens fetched', [
+            'seller_count' => $sellerUsers->count(),
+            'seller_ids' => $sellerUsers->pluck('id')->toArray()
+        ]);
+
+        $aTokens = [];
+        $sTokens = [];
+
+        // Process admin tokens
+        foreach ($adminFirebaseTokens as $adminId => $adminToken) {
+            $tokens = is_array($adminToken) ? array_values($adminToken) : [$adminToken];
+            $aTokens = array_merge($aTokens, $tokens);
+            
+            Log::debug('Admin token processed', [
+                'user_id' => $adminId,
+                'token_count' => count($tokens),
+                'token_sample' => !empty($tokens) ? substr($tokens[0], 0, 10) . '...' : 'none'
+            ]);
+        }
+
+        // Process seller tokens
+        foreach ($sellersFirebaseTokens as $sellerId => $sellerToken) {
+            $tokens = is_array($sellerToken) ? array_values($sellerToken) : [$sellerToken];
+            $sTokens = array_merge($sTokens, $tokens);
+            
+            Log::debug('Seller token processed', [
+                'user_id' => $sellerId,
+                'token_count' => count($tokens),
+                'token_sample' => !empty($tokens) ? substr($tokens[0], 0, 10) . '...' : 'none'
+            ]);
+        }
+
+        $allTokens = array_values(array_unique(array_merge($aTokens, $sTokens)));
+        $allUserIds = array_merge(array_keys($adminFirebaseTokens), array_keys($sellersFirebaseTokens));
+
+        Log::info('Sending notification', [
+            'total_tokens' => count($allTokens),
+            'total_users' => count($allUserIds),
+            'notification_type' => PushNotification::NEW_ORDER,
+            'order_id' => $order->id
+        ]);
+
+        $this->sendNotification(
+            $allTokens,
+            __('errors.' . ResponseError::NEW_ORDER, ['id' => $order->id], $this->language),
             $order->id,
             $order->setAttribute('type', PushNotification::NEW_ORDER)?->only(['id', 'status', 'delivery_type']),
-			array_merge(array_keys($adminFirebaseTokens), array_keys($sellersFirebaseTokens))
-		);
-
-	}
+            $allUserIds
+        );
+    }
 
 	private function projectId()
 	{
