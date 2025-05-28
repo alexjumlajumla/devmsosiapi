@@ -98,16 +98,42 @@ class LoginController extends Controller
                 'token_created' => true
             ]);
 
-            // Format the response to match frontend expectations
-            $response = [
-                'access_token'  => $token,
-                'token_type'    => 'Bearer',
-                'user'          => UserResource::make($user->loadMissing(['shop', 'model'])),
-            ];
+            try {
+                // Load user relations
+                $user->loadMissing(['shop', 'model']);
+                
+                // Create user resource
+                $userResource = UserResource::make($user);
+                
+                // Format the response to match frontend expectations
+                $response = [
+                    'access_token'  => $token,
+                    'token_type'    => 'Bearer',
+                    'user'          => $userResource,
+                ];
 
-            \Log::debug('Login response', ['response' => $response]);
-            
-            return response()->json($response, 200);
+                \Log::debug('Login response prepared', [
+                    'user_id' => $user->id,
+                    'has_shop' => !empty($user->shop),
+                    'has_model' => !empty($user->model),
+                    'response_keys' => array_keys($response)
+                ]);
+                
+                return response()->json($response, 200, [], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+                
+            } catch (\Exception $e) {
+                \Log::error('Error preparing login response', [
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString(),
+                    'user_id' => $user->id
+                ]);
+                
+                return response()->json([
+                    'status' => false,
+                    'message' => 'Error preparing user data',
+                    'error' => config('app.debug') ? $e->getMessage() : null
+                ], 500);
+            }
 
         } catch (\Exception $e) {
             \Log::error('Login error: ' . $e->getMessage(), [
@@ -204,16 +230,42 @@ class LoginController extends Controller
                 'token_created' => true
             ]);
 
-            // Format the response to match frontend expectations
-            $response = [
-                'access_token'  => $token,
-                'token_type'    => 'Bearer',
-                'user'          => UserResource::make($user->loadMissing(['shop', 'model'])),
-            ];
+            try {
+                // Load user relations
+                $user->loadMissing(['shop', 'model']);
+                
+                // Create user resource
+                $userResource = UserResource::make($user);
+                
+                // Format the response to match frontend expectations
+                $response = [
+                    'access_token'  => $token,
+                    'token_type'    => 'Bearer',
+                    'user'          => $userResource,
+                ];
 
-            \Log::debug('Phone login response', ['response' => $response]);
-            
-            return response()->json($response, 200);
+                \Log::debug('Phone login response prepared', [
+                    'user_id' => $user->id,
+                    'has_shop' => !empty($user->shop),
+                    'has_model' => !empty($user->model),
+                    'response_keys' => array_keys($response)
+                ]);
+                
+                return response()->json($response, 200, [], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+                
+            } catch (\Exception $e) {
+                \Log::error('Error preparing phone login response', [
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString(),
+                    'user_id' => $user->id
+                ]);
+                
+                return response()->json([
+                    'status' => false,
+                    'message' => 'Error preparing user data',
+                    'error' => config('app.debug') ? $e->getMessage() : null
+                ], 500);
+            }
 
         } catch (\Exception $e) {
             \Log::error('Phone login error: ' . $e->getMessage(), [
