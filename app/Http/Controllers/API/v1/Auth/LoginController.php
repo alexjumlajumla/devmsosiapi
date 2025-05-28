@@ -35,70 +35,200 @@ class LoginController extends Controller
 
     public function login(LoginRequest $request): JsonResponse
     {
-        if ($request->input('phone')) {
-            return $this->loginByPhone($request);
-        }
+        try {
+            if ($request->input('phone')) {
+                return $this->loginByPhone($request);
+            }
 
-        if (!auth()->attempt($request->only(['email', 'password']))) {
-            return $this->onErrorResponse([
-                'code'    => ResponseError::ERROR_102,
-                'message' => __('errors.' . ResponseError::ERROR_102, locale: $this->language)
+            \Log::info('Login attempt', [
+                'email' => $request->input('email'),
+                'has_firebase_token' => $request->has('firebase_token'),
+                'ip' => $request->ip(),
+                'user_agent' => $request->userAgent()
             ]);
-        }
 
-        $user = auth()->user();
-        
-        // Add FCM token if provided
-        if ($request->has('firebase_token')) {
-            $user->addFcmToken($request->input('firebase_token'));
-            $user->save();
+            if (!auth()->attempt($request->only(['email', 'password']))) {
+                \Log::warning('Login failed: Invalid credentials', [
+                    'email' => $request->input('email'),
+                    'ip' => $request->ip()
+                ]);
+                return $this->onErrorResponse([
+                    'code'    => ResponseError::ERROR_102,
+                    'message' => __('errors.' . ResponseError::ERROR_102, locale: $this->language)
+                ]);
+            }
+
+            $user = auth()->user();
+            \Log::info('User authenticated', [
+                'user_id' => $user->id,
+                'email' => $user->email,
+                'has_firebase_token' => $request->has('firebase_token')
+            ]);
             
+            // Add FCM token if provided
+            if ($request->has('firebase_token')) {
+                try {
+                    $firebaseToken = $request->input('firebase_token');
+                    \Log::debug('Adding FCM token', [
+                        'user_id' => $user->id,
+                        'token_prefix' => substr($firebaseToken, 0, 10) . '...',
+                        'token_length' => strlen($firebaseToken)
+                    ]);
+                    
+                    $user->addFcmToken($firebaseToken);
+                    $user->save();
+                    \Log::info('FCM token added successfully', ['user_id' => $user->id]);
+                } catch (\Exception $e) {
+                    \Log::error('Failed to add FCM token: ' . $e->getMessage(), [
+                        'user_id' => $user->id,
+                        'exception' => $e
+                    ]);
+                    // Continue with login even if FCM token fails
+                }
+            }    
             \Log::info('[FirebaseToken] Token added during login', [
                 'user_id' => $user->id,
                 'token_prefix' => substr($request->input('firebase_token'), 0, 10) . '...',
                 'token_count' => count($user->getFcmTokens())
             ]);
+
+            $token = $user->createToken('api_token')->plainTextToken;
+            \Log::info('Login successful', [
+                'user_id' => $user->id,
+                'token_created' => true
+            ]);
+
+            return $this->successResponse(
+                __('errors.' . ResponseError::SUCCESS, locale: $this->language),
+                [
+                    'access_token'  => $token,
+                    'token_type'    => 'Bearer',
+                    'user'          => UserResource::make($user->loadMissing(['shop', 'model'])),
+                ]
+            );
+
+        } catch (\Exception $e) {
+            \Log::error('Login error: ' . $e->getMessage(), [
+                'exception' => $e,
+                'trace' => $e->getTraceAsString(),
+                'request' => [
+                    'email' => $request->input('email'),
+                    'has_firebase_token' => $request->has('firebase_token'),
+                    'ip' => $request->ip()
+                ]
+            ]);
+
+            return response()->json([
+                'status' => false,
+                'code' => ResponseError::ERROR_400,
+                'message' => 'An error occurred during login. Please try again.',
+                'debug' => config('app.debug') ? [
+                    'error' => $e->getMessage(),
+                    'file' => $e->getFile() . ':' . $e->getLine(),
+                ] : null
+            ], 500);
         }
-
-        $token = $user->createToken('api_token')->plainTextToken;
-
-        return $this->successResponse('User successfully logged in', [
-            'access_token'  => $token,
-            'token_type'    => 'Bearer',
-            'user'          => UserResource::make($user->loadMissing(['shop', 'model'])),
-        ]);
     }
 
     protected function loginByPhone($request): JsonResponse
     {
-        if (!auth()->attempt($request->only('phone', 'password'))) {
-            return $this->onErrorResponse([
-                'code'    => ResponseError::ERROR_102,
-                'message' => __('errors.' . ResponseError::ERROR_102, locale: $this->language)
+        try {
+            \Log::info('Phone login attempt', [
+                'phone' => $request->input('phone'),
+                'has_firebase_token' => $request->has('firebase_token'),
+                'ip' => $request->ip(),
+                'user_agent' => $request->userAgent()
             ]);
-        }
 
-        $user = auth()->user();
-        
-        // Add FCM token if provided
-        if ($request->has('firebase_token')) {
-            $user->addFcmToken($request->input('firebase_token'));
-            $user->save();
-            
-            \Log::info('[FirebaseToken] Token added during phone login', [
+            // First try standard auth attempt
+            if (!auth()->attempt($request->only('phone', 'password'))) {
+                // If standard auth fails, try mobile phone authentication
+                $user = (new AuthByMobilePhone)->authentication($request->all());
+                
+                if (!($user instanceof User)) {
+                    \Log::error('AuthByMobilePhone returned invalid user', [
+                        'returned_type' => is_object($user) ? get_class($user) : gettype($user),
+                        'phone' => $request->input('phone')
+                    ]);
+                    return $this->onErrorResponse([
+                        'code'    => ResponseError::ERROR_102,
+                        'message' => __('errors.' . ResponseError::ERROR_102, locale: $this->language)
+                    ]);
+                }
+                
+                // Log the user in
+                auth()->login($user);
+            } else {
+                $user = auth()->user();
+            }
+
+            \Log::info('Phone authentication successful', [
                 'user_id' => $user->id,
-                'token_prefix' => substr($request->input('firebase_token'), 0, 10) . '...',
-                'token_count' => count($user->getFcmTokens())
+                'phone' => $user->phone,
+                'has_firebase_token' => $request->has('firebase_token')
             ]);
+
+            // Add FCM token if provided
+            if ($request->has('firebase_token')) {
+                try {
+                    $firebaseToken = $request->input('firebase_token');
+                    \Log::debug('Adding FCM token during phone login', [
+                        'user_id' => $user->id,
+                        'token_prefix' => substr($firebaseToken, 0, 10) . '...',
+                        'token_length' => strlen($firebaseToken)
+                    ]);
+                    
+                    $user->addFcmToken($firebaseToken);
+                    $user->save();
+                    
+                    \Log::info('[FirebaseToken] Token added during phone login', [
+                        'user_id' => $user->id,
+                        'provider' => 'phone',
+                        'token_prefix' => substr($firebaseToken, 0, 10) . '...',
+                        'token_count' => count($user->getFcmTokens())
+                    ]);
+                } catch (\Exception $e) {
+                    \Log::error('Failed to add FCM token during phone login: ' . $e->getMessage(), [
+                        'user_id' => $user->id,
+                        'exception' => $e
+                    ]);
+                    // Continue with login even if FCM token fails
+                }
+            }
+
+            $token = $user->createToken('api_token')->plainTextToken;
+            \Log::info('Phone login successful', [
+                'user_id' => $user->id,
+                'token_created' => true
+            ]);
+
+            return $this->successResponse('User successfully logged in', [
+                'access_token'  => $token,
+                'token_type'    => 'Bearer',
+                'user'          => UserResource::make($user->loadMissing(['shop', 'model'])),
+            ]);
+
+        } catch (\Exception $e) {
+            \Log::error('Phone login error: ' . $e->getMessage(), [
+                'exception' => $e,
+                'trace' => $e->getTraceAsString(),
+                'request' => [
+                    'phone' => $request->input('phone'),
+                    'has_firebase_token' => $request->has('firebase_token'),
+                    'ip' => $request->ip()
+                ]
+            ]);
+
+            return response()->json([
+                'status' => false,
+                'code' => ResponseError::ERROR_400,
+                'message' => 'An error occurred during phone login. Please try again.',
+                'debug' => config('app.debug') ? [
+                    'error' => $e->getMessage(),
+                    'file' => $e->getFile() . ':' . $e->getLine(),
+                ] : null
+            ], 500);
         }
-
-        $token = $user->createToken('api_token')->plainTextToken;
-
-        return $this->successResponse('User successfully logged in', [
-            'access_token' => $token,
-            'token_type'   => 'Bearer',
-            'user'         => UserResource::make($user->loadMissing(['shop', 'model'])),
-        ]);
     }
 
     /**
