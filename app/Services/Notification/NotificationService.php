@@ -228,20 +228,26 @@ class NotificationService
         $statusTitles = [
             'new' => 'New Order #' . $order->id,
             'accepted' => 'Order #' . $order->id . ' Accepted',
+            'processing' => 'Order #' . $order->id . ' is Being Prepared',
+            'cooking' => 'Order #' . $order->id . ' is Being Cooked',
             'ready' => 'Order #' . $order->id . ' is Ready',
-            'on_the_way' => 'Order #' . $order->id . ' is on the way',
+            'shipped' => 'Order #' . $order->id . ' Has Shipped',
+            'on_a_way' => 'Order #' . $order->id . ' is on the way',
             'delivered' => 'Order #' . $order->id . ' has been Delivered',
-            'cancelled' => 'Order #' . $order->id . ' has been Cancelled',
+            'canceled' => 'Order #' . $order->id . ' has been Canceled',
         ];
 
         $statusMessages = [
             'new' => 'Your order has been received and is being processed.',
             'accepted' => 'Restaurant has accepted your order and started preparing it.',
+            'processing' => 'Your order is being prepared by our kitchen staff.',
+            'cooking' => 'Your food is being cooked with care.',
             'ready' => 'Your order is ready for ' . ($order->delivery_type === 'delivery' ? 'delivery' : 'pickup') . '.',
-            'on_the_way' => 'Your order is on the way to your location.',
+            'shipped' => 'Your order has been shipped and is on its way to you.',
+            'on_a_way' => 'Your order is on the way to your location.',
             'delivered' => 'Your order has been delivered. ' . ($order->delivery_rating_enabled ? 'Please rate your experience!' : 'Enjoy your meal!'),
-            'cancelled' => $reason ? "Your order has been cancelled. Reason: $reason" 
-                                : 'Your order has been cancelled. Contact support for details.'
+            'canceled' => $reason ? "Your order has been canceled. Reason: $reason" 
+                                : 'Your order has been canceled. Contact support for details.'
         ];
 
         $title = $statusTitles[$status] ?? 'Order #' . $order->id . ' Update';
