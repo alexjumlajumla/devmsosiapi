@@ -22,6 +22,7 @@ use Illuminate\Database\Eloquent\Relations\HasOneThrough;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Foundation\Auth\User as Authenticatable;
+use Illuminate\Notifications\Notifiable;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Laravel\Sanctum\HasApiTokens;
@@ -164,7 +165,8 @@ class User extends Authenticatable implements MustVerifyEmail
         HasFactory,
         HasRoles,
         Loadable,
-		RequestToModel,
+        Notifiable,
+        RequestToModel,
         SoftDeletes;
 
     const DATES = [
