@@ -72,7 +72,7 @@ class PushNotification extends Model
     /**
      * Get the user that owns the notification.
      */
-    public function user()
+    public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
     }
@@ -183,10 +183,5 @@ class PushNotification extends Model
         self::CALL_WAITER           => self::CALL_WAITER,
         self::OUT_OF_STOCK          => self::OUT_OF_STOCK,
     ];
-
-    public function user(): BelongsTo
-    {
-        return $this->belongsTo(User::class);
-    }
 
 }
