@@ -98,67 +98,29 @@ class LoginController extends Controller
                 'token_created' => true
             ]);
 
-            try {
-                // Create a minimal user response
-                $userData = [
-                    'id' => $user->id,
-                    'uuid' => $user->uuid,
-                    'firstname' => $user->firstname,
-                    'lastname' => $user->lastname,
-                    'email' => $user->email,
-                    'phone' => $user->phone,
-                    'role' => $user->role,
-                    'created_at' => $user->created_at?->toIso8601String(),
-                    'updated_at' => $user->updated_at?->toIso8601String(),
-                ];
-                
-                // Format the response to match frontend expectations
-                $response = [
+            // Create a minimal user response
+            $userData = [
+                'id' => $user->id,
+                'uuid' => $user->uuid,
+                'firstname' => $user->firstname,
+                'lastname' => $user->lastname,
+                'email' => $user->email,
+                'phone' => $user->phone,
+                'role' => $user->role,
+                'created_at' => $user->created_at?->toIso8601String(),
+                'updated_at' => $user->updated_at?->toIso8601String(),
+            ];
+            
+            // Format the response to match frontend expectations
+            return response()->json([
+                'status' => true,
+                'message' => 'Login successful',
+                'data' => [
                     'access_token' => $token,
                     'token_type' => 'Bearer',
-                    'user' => $userData,
-                ];
-
-                // Log the complete response structure
-                \Log::debug('Login response prepared', [
-                    'user_id' => $user->id,
-                    'response_keys' => array_keys($response),
-                    'response_data' => $response
-                ]);
-
-                // Convert to JSON and log the result
-                $jsonResponse = json_encode($response, JSON_UNESCAPED_SLASHES);
-                \Log::debug('JSON response prepared', [
-                    'user_id' => $user->id,
-                    'json_response' => $jsonResponse,
-                    'json_last_error' => json_last_error(),
-                    'json_last_error_msg' => json_last_error_msg()
-                ]);
-
-                if ($jsonResponse === false) {
-                    throw new \RuntimeException('Failed to encode JSON: ' . json_last_error_msg());
-                }
-
-                // Bypass Laravel's response handling and send raw output
-                header('Content-Type: application/json');
-                header('Content-Length: ' . strlen($jsonResponse));
-                http_response_code(200);
-                echo $jsonResponse;
-                exit(0);
-                
-            } catch (\Exception $e) {
-                \Log::error('Error preparing login response', [
-                    'error' => $e->getMessage(),
-                    'trace' => $e->getTraceAsString(),
-                    'user_id' => $user->id
-                ]);
-                
-                return response()->json([
-                    'status' => false,
-                    'message' => 'Error preparing user data',
-                    'error' => config('app.debug') ? $e->getMessage() : null
-                ], 500);
-            }
+                    'user' => $userData
+                ]
+            ], 200, [], JSON_UNESCAPED_SLASHES);
 
         } catch (\Exception $e) {
             \Log::error('Login error: ' . $e->getMessage(), [
@@ -255,67 +217,29 @@ class LoginController extends Controller
                 'token_created' => true
             ]);
 
-            try {
-                // Create a minimal user response
-                $userData = [
-                    'id' => $user->id,
-                    'uuid' => $user->uuid,
-                    'firstname' => $user->firstname,
-                    'lastname' => $user->lastname,
-                    'email' => $user->email,
-                    'phone' => $user->phone,
-                    'role' => $user->role,
-                    'created_at' => $user->created_at?->toIso8601String(),
-                    'updated_at' => $user->updated_at?->toIso8601String(),
-                ];
-                
-                // Format the response to match frontend expectations
-                $response = [
+            // Create a minimal user response
+            $userData = [
+                'id' => $user->id,
+                'uuid' => $user->uuid,
+                'firstname' => $user->firstname,
+                'lastname' => $user->lastname,
+                'email' => $user->email,
+                'phone' => $user->phone,
+                'role' => $user->role,
+                'created_at' => $user->created_at?->toIso8601String(),
+                'updated_at' => $user->updated_at?->toIso8601String(),
+            ];
+            
+            // Format the response to match frontend expectations
+            return response()->json([
+                'status' => true,
+                'message' => 'Login successful',
+                'data' => [
                     'access_token' => $token,
                     'token_type' => 'Bearer',
-                    'user' => $userData,
-                ];
-
-                // Log the complete response structure
-                \Log::debug('Phone login response prepared', [
-                    'user_id' => $user->id,
-                    'response_keys' => array_keys($response),
-                    'response_data' => $response
-                ]);
-
-                // Convert to JSON and log the result
-                $jsonResponse = json_encode($response, JSON_UNESCAPED_SLASHES);
-                \Log::debug('Phone login JSON response prepared', [
-                    'user_id' => $user->id,
-                    'json_response' => $jsonResponse,
-                    'json_last_error' => json_last_error(),
-                    'json_last_error_msg' => json_last_error_msg()
-                ]);
-
-                if ($jsonResponse === false) {
-                    throw new \RuntimeException('Failed to encode JSON: ' . json_last_error_msg());
-                }
-
-                // Bypass Laravel's response handling and send raw output
-                header('Content-Type: application/json');
-                header('Content-Length: ' . strlen($jsonResponse));
-                http_response_code(200);
-                echo $jsonResponse;
-                exit(0);
-                
-            } catch (\Exception $e) {
-                \Log::error('Error preparing phone login response', [
-                    'error' => $e->getMessage(),
-                    'trace' => $e->getTraceAsString(),
-                    'user_id' => $user->id
-                ]);
-                
-                return response()->json([
-                    'status' => false,
-                    'message' => 'Error preparing user data',
-                    'error' => config('app.debug') ? $e->getMessage() : null
-                ], 500);
-            }
+                    'user' => $userData
+                ]
+            ], 200, [], JSON_UNESCAPED_SLASHES);
 
         } catch (\Exception $e) {
             \Log::error('Phone login error: ' . $e->getMessage(), [
