@@ -38,7 +38,17 @@ class UserResource extends JsonResource
             'kitchen_id'            => $this->when($this->kitchen_id, $this->kitchen_id),
             'isWork'                => $this->when($this->isWork, $this->isWork),
             'phone'                 => $this->phone,
-            'birthday'              => $this->when($this->birthday, $this->birthday?->format('Y-m-d H:i:s') . 'Z'),
+            'birthday'              => $this->when($this->birthday, function() {
+                $birthday = $this->birthday;
+                if (is_string($birthday)) {
+                    try {
+                        $birthday = \Carbon\Carbon::parse($birthday);
+                    } catch (\Exception $e) {
+                        return $birthday;
+                    }
+                }
+                return $birthday ? $birthday->format('Y-m-d H:i:s') . 'Z' : null;
+            }),
             'gender'                => $this->when($this->gender, $this->gender),
             'active'                => $this->active,
             'img'                   => $this->when($this->img, $this->img),
