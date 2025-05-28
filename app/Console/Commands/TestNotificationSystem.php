@@ -74,23 +74,47 @@ class TestNotificationSystem extends Command
         $unreadCount = $notificationService->getUnreadCount($user->id);
         $this->info("\nUnread notifications: {$unreadCount}");
         
-        // List recent notifications
-        $this->info("\nRecent notifications:");
+        // List recent notifications with better formatting
+        $this->info("\nRecent notifications (newest first):");
         $notifications = $user->notifications()
             ->latest()
             ->limit(5)
-            ->get();
-            
-        $this->table(
-            ['ID', 'Type', 'Title', 'Status', 'Created At'],
-            $notifications->map(function ($n) {
+            ->get()
+            ->map(function ($n) {
                 return [
-                    $n->id,
-                    $n->type,
-                    $n->title,
-                    $n->status,
-                    $n->created_at->diffForHumans(),
+                    'ID' => $n->id,
+                    'Type' => $n->type ?: 'N/A',
+                    'Title' => $n->title ?: 'N/A',
+                    'Status' => $n->status ?: 'N/A',
+                    'Created' => $n->created_at->diffForHumans(),
+                    'Data' => json_encode($n->data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES),
                 ];
+            });
+            
+        if ($notifications->isNotEmpty()) {
+            $this->table(
+                array_keys($notifications->first()),
+                $notifications->toArray()
+            );
+        } else {
+            $this->info('No notifications found for this user.');
+        }
+        
+        // Show notification stats
+        $stats = [
+            'Total' => $user->notifications()->count(),
+            'Unread' => $notificationService->getUnreadCount($user->id),
+            'Sent' => $user->notifications()->where('status', PushNotification::STATUS_SENT)->count(),
+            'Delivered' => $user->notifications()->where('status', PushNotification::STATUS_DELIVERED)->count(),
+            'Read' => $user->notifications()->where('status', PushNotification::STATUS_READ)->count(),
+            'Failed' => $user->notifications()->where('status', PushNotification::STATUS_FAILED)->count(),
+        ];
+        
+        $this->info("\nNotification Statistics:");
+        $this->table(
+            ['Metric', 'Count'],
+            collect($stats)->map(function ($value, $key) {
+                return ['Metric' => $key, 'Count' => $value];
             })
         );
         

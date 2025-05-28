@@ -45,7 +45,12 @@ class PushNotification extends Model
         'retry_attempts',
         'last_retry_at',
     ];
-
+    
+    /**
+     * The attributes that should be cast.
+     *
+     * @var array
+     */
     protected $casts = [
         'data' => 'array',
         'sent_at' => 'datetime',
@@ -55,9 +60,88 @@ class PushNotification extends Model
         'retry_attempts' => 'integer',
     ];
     
+    /**
+     * The model's default values for attributes.
+     *
+     * @var array
+     */
     protected $attributes = [
         'status' => self::STATUS_PENDING,
     ];
+    
+    /**
+     * Get the user that owns the notification.
+     */
+    public function user()
+    {
+        return $this->belongsTo(User::class);
+    }
+    
+    /**
+     * Scope a query to only include pending notifications.
+     */
+    public function scopePending($query)
+    {
+        return $query->where('status', self::STATUS_PENDING);
+    }
+    
+    /**
+     * Scope a query to only include sent notifications.
+     */
+    public function scopeSent($query)
+    {
+        return $query->where('status', self::STATUS_SENT);
+    }
+    
+    /**
+     * Scope a query to only include delivered notifications.
+     */
+    public function scopeDelivered($query)
+    {
+        return $query->where('status', self::STATUS_DELIVERED);
+    }
+    
+    /**
+     * Scope a query to only include read notifications.
+     */
+    public function scopeRead($query)
+    {
+        return $query->where('status', self::STATUS_READ);
+    }
+    
+    /**
+     * Scope a query to only include failed notifications.
+     */
+    public function scopeFailed($query)
+    {
+        return $query->where('status', self::STATUS_FAILED);
+    }
+    
+    /**
+     * Mark the notification as read.
+     */
+    public function markAsRead()
+    {
+        $this->update([
+            'status' => self::STATUS_READ,
+            'read_at' => now(),
+        ]);
+        
+        return $this;
+    }
+    
+    /**
+     * Mark the notification as delivered.
+     */
+    public function markAsDelivered()
+    {
+        $this->update([
+            'status' => self::STATUS_DELIVERED,
+            'delivered_at' => now(),
+        ]);
+        
+        return $this;
+    }
 
     const NEW_ORDER             = 'new_order';
     const NEW_PARCEL_ORDER      = 'new_parcel_order';

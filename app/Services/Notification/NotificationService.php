@@ -59,24 +59,44 @@ class NotificationService
                 return $notification;
             }
 
-            // Send notification
-            $this->sendNotification(
-                $tokens,
-                array_merge($data, [
-                    'title' => $title,
-                    'body' => $message,
-                    'type' => $type,
-                    'id' => $notification ? $notification->id : null,
-                ]),
-                [$user->id]
-            );
+            try {
+                // Send notification
+                $this->sendNotification(
+                    $tokens,
+                    array_merge($data, [
+                        'title' => $title,
+                        'body'  => $message,
+                        'type'  => $type,
+                        'id'    => $notification ? (string)$notification->id : null,
+                    ]),
+                    [$user->id],
+                    $title,
+                    $data,
+                    $title // firebaseTitle
+                );
 
-            // Update notification status
-            if ($notification) {
-                $notification->update([
-                    'status' => PushNotification::STATUS_SENT,
-                    'sent_at' => now(),
+                // Update notification status to sent
+                if ($notification) {
+                    $notification->update([
+                        'status' => PushNotification::STATUS_SENT,
+                        'sent_at' => now(),
+                    ]);
+                }
+            } catch (\Throwable $e) {
+                Log::error('Failed to send FCM notification: ' . $e->getMessage(), [
+                    'user_id' => $user->id,
+                    'tokens' => $tokens,
+                    'exception' => $e
                 ]);
+                
+                if ($notification) {
+                    $notification->update([
+                        'status' => PushNotification::STATUS_FAILED,
+                        'error_message' => $e->getMessage(),
+                    ]);
+                }
+                
+                throw $e;
             }
 
             DB::commit();
