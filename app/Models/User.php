@@ -215,23 +215,54 @@ class User extends Authenticatable implements MustVerifyEmail
      */
     public function getFcmTokens(): array
     {
-        $tokens = $this->firebase_token;
-        
-        if (empty($tokens)) {
+        try {
+            $tokens = $this->firebase_token;
+            
+            if (empty($tokens)) {
+                return [];
+            }
+            
+            // Handle JSON string
+            if (is_string($tokens) && $this->isJson($tokens)) {
+                $tokens = json_decode($tokens, true);
+            }
+            
+            // Handle string token
+            if (is_string($tokens) && $this->isValidFcmToken($tokens)) {
+                return [$tokens];
+            }
+            
+            // Handle array of tokens
+            if (is_array($tokens)) {
+                return array_values(array_filter($tokens, function($token) {
+                    return is_string($token) && $this->isValidFcmToken($token);
+                }));
+            }
+            
+            return [];
+        } catch (\Exception $e) {
+            \Log::error('Error in getFcmTokens: ' . $e->getMessage(), [
+                'user_id' => $this->id,
+                'token_type' => gettype($this->firebase_token)
+            ]);
             return [];
         }
-        
-        if (is_string($tokens)) {
-            return [$tokens];
+    }
+    
+    /**
+     * Check if string is JSON
+     * 
+     * @param string $string
+     * @return bool
+     */
+    protected function isJson($string): bool
+    {
+        if (!is_string($string)) {
+            return false;
         }
         
-        if (is_array($tokens)) {
-            return array_values(array_filter($tokens, function($token) {
-                return is_string($token) && $this->isValidFcmToken($token);
-            }));
-        }
-        
-        return [];
+        json_decode($string);
+        return json_last_error() === JSON_ERROR_NONE;
     }
     
     /**
@@ -252,20 +283,44 @@ class User extends Authenticatable implements MustVerifyEmail
      */
     public function addFcmToken(string $token): bool
     {
-        if (!$this->isValidFcmToken($token)) {
+        try {
+            if (!$this->isValidFcmToken($token)) {
+                \Log::warning('Invalid FCM token format', [
+                    'user_id' => $this->id,
+                    'token_prefix' => substr($token, 0, 10) . '...'
+                ]);
+                return false;
+            }
+            
+            $existingTokens = $this->getFcmTokens();
+            
+            // Check if token already exists
+            if (in_array($token, $existingTokens, true)) {
+                \Log::debug('FCM token already exists for user', [
+                    'user_id' => $this->id,
+                    'token_count' => count($existingTokens)
+                ]);
+                return false;
+            }
+            
+            // Add new token and ensure uniqueness
+            $existingTokens[] = $token;
+            $this->firebase_token = array_values(array_unique($existingTokens));
+            
+            \Log::info('Added new FCM token for user', [
+                'user_id' => $this->id,
+                'token_count' => count($existingTokens)
+            ]);
+            
+            return true;
+            
+        } catch (\Exception $e) {
+            \Log::error('Error adding FCM token: ' . $e->getMessage(), [
+                'user_id' => $this->id,
+                'token_prefix' => $token ? substr($token, 0, 10) . '...' : 'empty'
+            ]);
             return false;
         }
-        
-        $tokens = $this->getFcmTokens();
-        
-        if (in_array($token, $tokens, true)) {
-            return false;
-        }
-        
-        $tokens[] = $token;
-        $this->firebase_token = array_values(array_unique($tokens));
-        
-        return true;
     }
     
     /**
@@ -276,19 +331,49 @@ class User extends Authenticatable implements MustVerifyEmail
      */
     public function removeFcmToken(string $token): bool
     {
-        $tokens = $this->getFcmTokens();
-        $initialCount = count($tokens);
-        
-        $tokens = array_values(array_filter($tokens, function($t) use ($token) {
-            return $t !== $token;
-        }));
-        
-        if (count($tokens) !== $initialCount) {
-            $this->firebase_token = !empty($tokens) ? $tokens : null;
-            return true;
+        try {
+            if (empty($token)) {
+                \Log::warning('Attempted to remove empty FCM token', [
+                    'user_id' => $this->id
+                ]);
+                return false;
+            }
+            
+            $tokens = $this->getFcmTokens();
+            $initialCount = count($tokens);
+            
+            // Filter out the token to remove
+            $tokens = array_values(array_filter($tokens, function($t) use ($token) {
+                return $t !== $token;
+            }));
+            
+            // If count changed, token was removed
+            if (count($tokens) !== $initialCount) {
+                $this->firebase_token = !empty($tokens) ? $tokens : null;
+                
+                \Log::info('Removed FCM token from user', [
+                    'user_id' => $this->id,
+                    'token_count' => count($tokens),
+                    'token_removed' => substr($token, 0, 10) . '...'
+                ]);
+                
+                return true;
+            }
+            
+            \Log::debug('FCM token not found for removal', [
+                'user_id' => $this->id,
+                'token_prefix' => substr($token, 0, 10) . '...'
+            ]);
+            
+            return false;
+            
+        } catch (\Exception $e) {
+            \Log::error('Error removing FCM token: ' . $e->getMessage(), [
+                'user_id' => $this->id,
+                'token_prefix' => $token ? substr($token, 0, 10) . '...' : 'empty'
+            ]);
+            return false;
         }
-        
-        return false;
     }
     
     /**
@@ -299,22 +384,85 @@ class User extends Authenticatable implements MustVerifyEmail
      */
     public function isValidFcmToken($token): bool
     {
-        if (!is_string($token) || strlen($token) < 100 || strlen($token) > 500) {
+        try {
+            // Check if token is a non-empty string
+            if (!is_string($token) || trim($token) === '') {
+                return false;
+            }
+            
+            // Check token length (FCM tokens are typically 152-163 characters)
+            $length = strlen($token);
+            if ($length < 100 || $length > 500) {
+                return false;
+            }
+            
+            // Check for common FCM token patterns
+            $isValid = (bool) preg_match('/^[a-zA-Z0-9_\-:]+$/', $token);
+            
+            // Additional validation for FCM token segments
+            if ($isValid) {
+                $segments = explode(':', $token);
+                
+                // Check for common FCM token prefix patterns
+                $commonPrefixes = ['APA91', 'c', 'd', 'e', 'f', 'fL', 'fcm', 'f'];
+                $firstSegment = $segments[0] ?? '';
+                
+                if (!empty($firstSegment) && !in_array($firstSegment, $commonPrefixes, true)) {
+                    // If the first segment doesn't match common prefixes, it might still be valid
+                    // but we'll log it for investigation
+                    \Log::debug('Uncommon FCM token prefix', [
+                        'prefix' => substr($firstSegment, 0, 10) . (strlen($firstSegment) > 10 ? '...' : ''),
+                        'token_prefix' => substr($token, 0, 10) . '...'
+                    ]);
+                }
+                
+                // Check for minimum segment count (FCM tokens typically have multiple segments)
+                if (count($segments) < 2) {
+                    return false;
+                }
+            }
+            
+            return $isValid;
+            
+        } catch (\Exception $e) {
+            \Log::error('Error validating FCM token: ' . $e->getMessage(), [
+                'token_type' => gettype($token),
+                'token_length' => is_string($token) ? strlen($token) : 0
+            ]);
             return false;
         }
-        
-        // Basic format validation for FCM tokens
-        return (bool) preg_match('/^[a-zA-Z0-9_\-:]+$/', $token);
     }
 
     /**
      * Clear all FCM tokens for this user
      * 
-     * @return void
+     * @return bool True if tokens were cleared, false if no tokens existed or an error occurred
      */
-    public function clearFcmTokens(): void
+    public function clearFcmTokens(): bool
     {
-        $this->firebase_token = [];
+        try {
+            $hadTokens = !empty($this->firebase_token);
+            
+            if ($hadTokens) {
+                $this->firebase_token = [];
+                
+                \Log::info('Cleared all FCM tokens for user', [
+                    'user_id' => $this->id
+                ]);
+            } else {
+                \Log::debug('No FCM tokens to clear for user', [
+                    'user_id' => $this->id
+                ]);
+            }
+            
+            return $hadTokens;
+            
+        } catch (\Exception $e) {
+            \Log::error('Error clearing FCM tokens: ' . $e->getMessage(), [
+                'user_id' => $this->id
+            ]);
+            return false;
+        }
     }
     
     /**

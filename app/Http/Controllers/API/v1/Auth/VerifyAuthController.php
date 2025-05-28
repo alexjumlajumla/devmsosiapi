@@ -22,7 +22,10 @@ use Throwable;
 
 class VerifyAuthController extends Controller
 {
-    use ApiResponse, \App\Traits\Notification;
+    use ApiResponse, \App\Traits\Notification {
+        // Use onErrorResponse from ApiResponse instead of errorResponse from Notification
+        ApiResponse::errorResponse insteadof \App\Traits\Notification;
+    }
 
     public function sendOtp(SendOtpRequest $request): JsonResponse
     {

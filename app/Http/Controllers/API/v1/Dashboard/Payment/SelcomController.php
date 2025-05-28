@@ -31,7 +31,10 @@ use App\Traits\Notification;
 //class SelcomController extends PaymentBaseController
 class SelcomController extends PaymentBaseController
 {
-    use OnResponse, ApiResponse, Notification;
+    use OnResponse, ApiResponse, \App\Traits\Notification {
+        // Use onErrorResponse from ApiResponse instead of errorResponse from Notification
+        ApiResponse::errorResponse insteadof \App\Traits\Notification;
+    }
 
     public function __construct(private SelcomService $service)
     {

@@ -17,7 +17,10 @@ use App\Traits\Notification;
 
 class PushNotificationController extends Controller
 {
-    use ApiResponse,Notification;
+    use ApiResponse, Notification {
+        // Use onErrorResponse from ApiResponse instead of errorResponse from Notification
+        ApiResponse::errorResponse insteadof \App\Traits\Notification;
+    }
 
     public function __construct(
         private PushNotificationRepository $repository,
