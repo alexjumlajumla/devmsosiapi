@@ -99,23 +99,28 @@ class LoginController extends Controller
             ]);
 
             try {
-                // Load user relations
-                $user->loadMissing(['shop', 'model']);
-                
-                // Create user resource
-                $userResource = UserResource::make($user);
+                // Create a minimal user response
+                $userData = [
+                    'id' => $user->id,
+                    'uuid' => $user->uuid,
+                    'firstname' => $user->firstname,
+                    'lastname' => $user->lastname,
+                    'email' => $user->email,
+                    'phone' => $user->phone,
+                    'role' => $user->role,
+                    'created_at' => $user->created_at?->toIso8601String(),
+                    'updated_at' => $user->updated_at?->toIso8601String(),
+                ];
                 
                 // Format the response to match frontend expectations
                 $response = [
-                    'access_token'  => $token,
-                    'token_type'    => 'Bearer',
-                    'user'          => $userResource,
+                    'access_token' => $token,
+                    'token_type' => 'Bearer',
+                    'user' => $userData,
                 ];
 
                 \Log::debug('Login response prepared', [
                     'user_id' => $user->id,
-                    'has_shop' => !empty($user->shop),
-                    'has_model' => !empty($user->model),
                     'response_keys' => array_keys($response)
                 ]);
                 
@@ -231,23 +236,28 @@ class LoginController extends Controller
             ]);
 
             try {
-                // Load user relations
-                $user->loadMissing(['shop', 'model']);
-                
-                // Create user resource
-                $userResource = UserResource::make($user);
+                // Create a minimal user response
+                $userData = [
+                    'id' => $user->id,
+                    'uuid' => $user->uuid,
+                    'firstname' => $user->firstname,
+                    'lastname' => $user->lastname,
+                    'email' => $user->email,
+                    'phone' => $user->phone,
+                    'role' => $user->role,
+                    'created_at' => $user->created_at?->toIso8601String(),
+                    'updated_at' => $user->updated_at?->toIso8601String(),
+                ];
                 
                 // Format the response to match frontend expectations
                 $response = [
-                    'access_token'  => $token,
-                    'token_type'    => 'Bearer',
-                    'user'          => $userResource,
+                    'access_token' => $token,
+                    'token_type' => 'Bearer',
+                    'user' => $userData,
                 ];
 
                 \Log::debug('Phone login response prepared', [
                     'user_id' => $user->id,
-                    'has_shop' => !empty($user->shop),
-                    'has_model' => !empty($user->model),
                     'response_keys' => array_keys($response)
                 ]);
                 
