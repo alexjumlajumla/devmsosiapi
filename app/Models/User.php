@@ -290,6 +290,10 @@ class User extends Authenticatable implements MustVerifyEmail
         
         return false;
     }
+    
+    /**
+     * Validate an FCM token
+     * 
      * @param mixed $token The token to validate
      * @return bool True if valid, false otherwise
      */
