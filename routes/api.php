@@ -1963,6 +1963,46 @@ Route::prefix('v1')->group(function () {
     Route::post('/voice-order/transcribe', [VoiceOrderController::class, 'transcribe']);
     Route::post('/test-openai-key', [VoiceOrderController::class, 'testOpenAIKey']);
     
+    // FCM Token Management
+    Route::prefix('fcm-token')
+        ->middleware(['auth:sanctum', 'verified'])
+        ->name('fcm.')
+        ->group(function () {
+            // Add or update FCM token
+            Route::post('update', [FcmTokenController::class, 'update'])
+                ->name('update');
+                
+            // Remove a specific FCM token
+            Route::post('remove', [FcmTokenController::class, 'remove'])
+                ->name('remove');
+                
+            // Get all FCM tokens for the current user (masked)
+            Route::get('tokens', [FcmTokenController::class, 'getTokens'])
+                ->name('tokens');
+                
+            // Clear all FCM tokens for the current user
+            Route::delete('clear', [FcmTokenController::class, 'clear'])
+                ->name('clear');
+        });
+
+    // Admin FCM management (for admin dashboard)
+    Route::prefix('admin/fcm')
+        ->middleware(['auth:sanctum', 'role:admin', 'verified'])
+        ->name('admin.fcm.')
+        ->group(function () {
+            // List all users with FCM tokens (paginated)
+            Route::get('users', [AdminFcmController::class, 'usersWithTokens'])
+                ->name('users');
+                
+            // Send test notification to a user
+            Route::post('test-notification', [AdminFcmController::class, 'sendTestNotification'])
+                ->name('test-notification');
+                
+            // Clean up invalid FCM tokens
+            Route::post('cleanup-tokens', [AdminFcmController::class, 'cleanupInvalidTokens'])
+                ->name('cleanup-tokens');
+        });
+
     // Authenticated voice order routes
     Route::middleware('auth:sanctum')->group(function () {
         Route::post('/voice-order/realtime-transcription', [VoiceOrderController::class, 'realtimeTranscription']);

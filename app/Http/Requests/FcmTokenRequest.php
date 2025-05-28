@@ -14,7 +14,7 @@ class FcmTokenRequest extends FormRequest
      */
     public function authorize(): bool
     {
-        return true; // Handled by auth middleware
+        return true;
     }
 
     /**
@@ -28,12 +28,13 @@ class FcmTokenRequest extends FormRequest
             'token' => [
                 'required',
                 'string',
-                'min:100',
-                'max:500',
-                // Basic FCM token format validation
+                'min:152',
+                'max:200',
+                'regex:/^[a-zA-Z0-9\-_.~%]+$/',
                 function ($attribute, $value, $fail) {
-                    if (!preg_match('/^[a-zA-Z0-9_\-:]+$/', $value)) {
-                        $fail('The FCM token format is invalid.');
+                    // Additional validation for FCM token format
+                    if (!preg_match('/^[a-zA-Z0-9\-_.~%]+$/', $value)) {
+                        $fail('The ' . $attribute . ' contains invalid characters.');
                     }
                 },
             ],

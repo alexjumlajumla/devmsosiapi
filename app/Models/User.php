@@ -195,34 +195,69 @@ class User extends Authenticatable implements MustVerifyEmail
      * @var array
      */
     /**
-     * The attributes that should be cast.
-     *
-     * @var array
-     */
     protected $casts = [
-        'email_verified_at' => 'datetime:Y-m-d H:i:s',
-        'phone_verified_at' => 'datetime:Y-m-d H:i:s',
-        'birthday'          => 'datetime:Y-m-d H:i:s',
-        'firebase_token'    => 'array',
-        'location'          => 'array',
+        'email_verified_at' => 'datetime',
+        'firebase_token' => 'array',
+        'notification_settings' => 'array',
     ];
 
     /**
-     * Add a new FCM token to the user's tokens
+     * The accessors to append to the model's array form.
      *
-     * @param string $token The FCM token to add
-     * @return bool True if token was added, false if it was a duplicate
-     * @throws \InvalidArgumentException If token is invalid
+     * @var array
+     */
+    protected $appends = ['fcm_tokens_count'];
+
+    /**
+     * Get the user's FCM tokens
+     *
+     * @return array
+     */
+    public function getFcmTokens(): array
+    {
+        $tokens = $this->firebase_token;
+        
+        if (empty($tokens)) {
+            return [];
+        }
+        
+        if (is_string($tokens)) {
+            return [$tokens];
+        }
+        
+        if (is_array($tokens)) {
+            return array_values(array_filter($tokens, function($token) {
+                return is_string($token) && $this->isValidFcmToken($token);
+            }));
+        }
+        
+        return [];
+    }
+    
+    /**
+     * Get the number of FCM tokens for the user
+     * 
+     * @return int
+     */
+    public function getFcmTokensCountAttribute(): int
+    {
+        return count($this->getFcmTokens());
+    }
+    
+    /**
+     * Add an FCM token to the user
+     * 
+     * @param string $token
+     * @return bool True if the token was added, false if it already exists or is invalid
      */
     public function addFcmToken(string $token): bool
     {
         if (!$this->isValidFcmToken($token)) {
-            throw new \InvalidArgumentException('Invalid FCM token format');
+            return false;
         }
         
         $tokens = $this->getFcmTokens();
         
-        // Don't add duplicate tokens
         if (in_array($token, $tokens, true)) {
             return false;
         }
@@ -232,55 +267,29 @@ class User extends Authenticatable implements MustVerifyEmail
         
         return true;
     }
-
+    
     /**
-     * Remove an FCM token
+     * Remove an FCM token from the user
      * 
-     * @param string $token The FCM token to remove
-     * @return bool True if token was removed, false if it didn't exist
+     * @param string $token
+     * @return bool True if the token was removed, false if it didn't exist
      */
     public function removeFcmToken(string $token): bool
     {
         $tokens = $this->getFcmTokens();
-        $countBefore = count($tokens);
+        $initialCount = count($tokens);
         
-        // Filter out the token to be removed
-        $tokens = array_values(array_filter($tokens, fn($t) => $t !== $token));
+        $tokens = array_values(array_filter($tokens, function($t) use ($token) {
+            return $t !== $token;
+        }));
         
-        if (count($tokens) === $countBefore) {
-            return false; // Token didn't exist
+        if (count($tokens) !== $initialCount) {
+            $this->firebase_token = !empty($tokens) ? $tokens : null;
+            return true;
         }
         
-        $this->firebase_token = $tokens;
-        return true;
+        return false;
     }
-
-    /**
-     * Get all valid FCM tokens for this user
-     * 
-     * @return array Array of valid FCM tokens
-     */
-    public function getFcmTokens(): array
-    {
-        $tokens = $this->firebase_token ?? [];
-        
-        // Convert to array if it's a string (for backward compatibility)
-        if (is_string($tokens)) {
-            $tokens = [$tokens];
-        }
-        
-        // Ensure we have an array
-        if (!is_array($tokens)) {
-            return [];
-        }
-        
-        // Filter out any invalid tokens
-        return array_values(array_filter($tokens, [$this, 'isValidFcmToken']));
-    }
-
-    /**
-     * Check if a token is a valid FCM token
-     * 
      * @param mixed $token The token to validate
      * @return bool True if valid, false otherwise
      */
