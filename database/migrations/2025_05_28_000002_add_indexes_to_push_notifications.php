@@ -12,14 +12,26 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('push_notifications', function (Blueprint $table) {
+            $sm = Schema::getConnection()->getDoctrineSchemaManager();
+            $indexes = $sm->listTableIndexes($table->getTable());
+
             // Add composite index for faster queries on user notifications
-            $table->index(['user_id', 'status', 'created_at']);
+            $userStatusCreatedIndex = 'push_notifications_user_id_status_created_at_index';
+            if (!array_key_exists($userStatusCreatedIndex, $indexes)) {
+                $table->index(['user_id', 'status', 'created_at']);
+            }
             
             // Add index for cleanup queries
-            $table->index(['status', 'created_at']);
+            $statusCreatedIndex = 'push_notifications_status_created_at_index';
+            if (!array_key_exists($statusCreatedIndex, $indexes)) {
+                $table->index(['status', 'created_at']);
+            }
             
             // Add index for retry logic
-            $table->index(['status', 'last_retry_at']);
+            $statusLastRetryIndex = 'push_notifications_status_last_retry_at_index';
+            if (!array_key_exists($statusLastRetryIndex, $indexes)) {
+                $table->index(['status', 'last_retry_at']);
+            }
         });
     }
 
@@ -29,9 +41,20 @@ return new class extends Migration
     public function down(): void
     {
         Schema::table('push_notifications', function (Blueprint $table) {
-            $table->dropIndex(['user_id', 'status', 'created_at']);
-            $table->dropIndex(['status', 'created_at']);
-            $table->dropIndex(['status', 'last_retry_at']);
+            $sm = Schema::getConnection()->getDoctrineSchemaManager();
+            $indexes = $sm->listTableIndexes($table->getTable());
+            
+            $indexesToDrop = [
+                'push_notifications_user_id_status_created_at_index',
+                'push_notifications_status_created_at_index',
+                'push_notifications_status_last_retry_at_index',
+            ];
+
+            foreach ($indexesToDrop as $index) {
+                if (array_key_exists($index, $indexes)) {
+                    $table->dropIndex($index);
+                }
+            }
         });
     }
 };
