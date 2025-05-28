@@ -163,12 +163,28 @@ class Order extends Model
                 $oldStatus = $order->getOriginal('status');
                 $newStatus = $order->status;
                 
+                \Log::info('Order status changed', [
+                    'order_id' => $order->id,
+                    'old_status' => $oldStatus,
+                    'new_status' => $newStatus,
+                    'dirty' => $order->getDirty(),
+                    'original' => $order->getOriginal()
+                ]);
+                
                 // Only dispatch event if status actually changed
                 if ($oldStatus !== $newStatus) {
                     // Get the reason if this is a cancellation
                     $reason = ($newStatus === self::STATUS_CANCELED) 
                         ? $order->cancel_reason ?? 'No reason provided' 
                         : null;
+                        
+                    // Log the event dispatching
+                    \Log::info('Dispatching OrderStatusUpdated event', [
+                        'order_id' => $order->id,
+                        'old_status' => $oldStatus,
+                        'new_status' => $newStatus,
+                        'reason' => $reason
+                    ]);
                         
                     // Dispatch the event
                     Event::dispatch(new OrderStatusUpdated(

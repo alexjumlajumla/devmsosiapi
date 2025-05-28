@@ -33,18 +33,34 @@ class SendOrderStatusNotification implements ShouldQueue
      */
     public function handle(OrderStatusUpdated $event)
     {
+        Log::info('SendOrderStatusNotification: Handling order status update', [
+            'order_id' => $event->order->id,
+            'old_status' => $event->oldStatus,
+            'new_status' => $event->newStatus,
+            'reason' => $event->reason,
+            'queue' => $this->queue,
+            'attempts' => $this->attempts()
+        ]);
+
         try {
             $this->notificationService->sendOrderStatusUpdate(
                 $event->order,
                 $event->newStatus,
                 $event->reason
             );
+            
+            Log::info('SendOrderStatusNotification: Successfully processed notification', [
+                'order_id' => $event->order->id,
+                'status' => $event->newStatus
+            ]);
+            
         } catch (\Exception $e) {
-            Log::error('Failed to send order status notification', [
+            Log::error('SendOrderStatusNotification: Failed to send order status notification', [
                 'order_id' => $event->order->id,
                 'status' => $event->newStatus,
                 'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
+                'trace' => $e->getTraceAsString(),
+                'attempts' => $this->attempts()
             ]);
             
             // Retry the job later (Laravel will handle the retry logic)

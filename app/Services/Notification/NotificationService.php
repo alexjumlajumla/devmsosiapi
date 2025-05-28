@@ -169,11 +169,18 @@ class NotificationService
      */
     public function sendOrderStatusUpdate($order, string $status, ?string $reason = null): ?PushNotification
     {
+        Log::info('NotificationService: Sending order status update', [
+            'order_id' => $order->id,
+            'status' => $status,
+            'reason' => $reason
+        ]);
+        
         $user = $order->user;
         
         if (!$user) {
             Log::warning('Cannot send order status update: order has no user', [
-                'order_id' => $order->id
+                'order_id' => $order->id,
+                'status' => $status
             ]);
             return null;
         }
@@ -214,16 +221,50 @@ class NotificationService
             $data['cancellation_reason'] = $reason;
         }
 
-        if ($status === 'delivered' && $order->delivery_rating_enabled) {
-            $data['rating_enabled'] = true;
-        }
+    if ($status === 'delivered' && $order->delivery_rating_enabled) {
+        $data['rating_enabled'] = true;
+    }
 
-        return $this->sendToUser(
+    Log::info('NotificationService: Sending notification to user', [
+        'order_id' => $order->id,
+        'user_id' => $user->id,
+        'title' => $title,
+        'message' => $message,
+        'status' => $status,
+        'data' => $data
+    ]);
+
+    try {
+        $notification = $this->sendToUser(
             $user,
             $title,
             $message,
-            'order_status_update',
+            'order_' . $status,
             $data
         );
+
+        if ($notification) {
+            Log::info('NotificationService: Notification sent successfully', [
+                'notification_id' => $notification->id ?? 'unknown',
+                'order_id' => $order->id,
+                'status' => $status
+            ]);
+        } else {
+            Log::error('NotificationService: Failed to send notification', [
+                'order_id' => $order->id,
+                'status' => $status,
+                'user_id' => $user->id
+            ]);
+        }
+
+        return $notification;
+    } catch (\Exception $e) {
+        Log::error('NotificationService: Exception while sending notification', [
+            'order_id' => $order->id,
+            'status' => $status,
+            'error' => $e->getMessage(),
+            'trace' => $e->getTraceAsString()
+        ]);
+        throw $e;
     }
 }
