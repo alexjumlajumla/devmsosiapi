@@ -127,7 +127,7 @@ class LoginController extends Controller
                 ]);
 
                 // Convert to JSON and log the result
-                $jsonResponse = json_encode($response, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+                $jsonResponse = json_encode($response, JSON_UNESCAPED_SLASHES);
                 \Log::debug('JSON response prepared', [
                     'user_id' => $user->id,
                     'json_response' => $jsonResponse,
@@ -139,10 +139,12 @@ class LoginController extends Controller
                     throw new \RuntimeException('Failed to encode JSON: ' . json_last_error_msg());
                 }
 
-                return response($jsonResponse, 200, [
-                    'Content-Type' => 'application/json',
-                    'Content-Length' => strlen($jsonResponse)
-                ]);
+                // Bypass Laravel's response handling and send raw output
+                header('Content-Type: application/json');
+                header('Content-Length: ' . strlen($jsonResponse));
+                http_response_code(200);
+                echo $jsonResponse;
+                exit(0);
                 
             } catch (\Exception $e) {
                 \Log::error('Error preparing login response', [
@@ -282,7 +284,7 @@ class LoginController extends Controller
                 ]);
 
                 // Convert to JSON and log the result
-                $jsonResponse = json_encode($response, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+                $jsonResponse = json_encode($response, JSON_UNESCAPED_SLASHES);
                 \Log::debug('Phone login JSON response prepared', [
                     'user_id' => $user->id,
                     'json_response' => $jsonResponse,
@@ -294,10 +296,12 @@ class LoginController extends Controller
                     throw new \RuntimeException('Failed to encode JSON: ' . json_last_error_msg());
                 }
 
-                return response($jsonResponse, 200, [
-                    'Content-Type' => 'application/json',
-                    'Content-Length' => strlen($jsonResponse)
-                ]);
+                // Bypass Laravel's response handling and send raw output
+                header('Content-Type: application/json');
+                header('Content-Length: ' . strlen($jsonResponse));
+                http_response_code(200);
+                echo $jsonResponse;
+                exit(0);
                 
             } catch (\Exception $e) {
                 \Log::error('Error preparing phone login response', [
