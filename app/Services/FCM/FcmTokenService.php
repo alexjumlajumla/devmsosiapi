@@ -388,7 +388,24 @@ class FcmTokenService
     }
     
     /**
-     * Check if a token is valid
+     * Check if a token is a valid FCM token format
+     * 
+     * @param string $token
+     * @return bool
+     */
+    public function isValidFcmToken(string $token): bool
+    {
+        if (!is_string($token) || empty($token)) {
+            return false;
+        }
+
+        // Basic validation for FCM token format
+        // FCM tokens are typically 152-163 characters long and contain alphanumeric characters and some special characters
+        return (bool) preg_match('/^[a-zA-Z0-9_\-:]+$/', $token);
+    }
+    
+    /**
+     * Check if a token is valid (alias for isValidFcmToken for backward compatibility)
      * 
      * @param string $token
      * @return bool
