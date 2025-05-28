@@ -194,6 +194,11 @@ class User extends Authenticatable implements MustVerifyEmail
      *
      * @var array
      */
+    /**
+     * The attributes that should be cast.
+     *
+     * @var array
+     */
     protected $casts = [
         'email_verified_at' => 'datetime:Y-m-d H:i:s',
         'phone_verified_at' => 'datetime:Y-m-d H:i:s',
@@ -201,6 +206,67 @@ class User extends Authenticatable implements MustVerifyEmail
         'firebase_token'    => 'array',
         'location'          => 'array',
     ];
+
+    /**
+     * Add a new FCM token to the user's tokens
+     *
+     * @param string $token
+     * @return void
+     */
+    public function addFcmToken(string $token): void
+    {
+        $tokens = $this->firebase_token ?? [];
+        
+        // Don't add duplicate tokens
+        if (!in_array($token, $tokens, true)) {
+            $tokens[] = $token;
+            $this->firebase_token = array_values(array_unique($tokens));
+        }
+    }
+
+    /**
+     * Remove an FCM token
+     * 
+     * @param string $token
+     * @return void
+     */
+    public function removeFcmToken(string $token): void
+    {
+        $tokens = $this->firebase_token ?? [];
+        $this->firebase_token = array_values(array_filter($tokens, fn($t) => $t !== $token));
+    }
+
+    /**
+     * Get all FCM tokens
+     * 
+     * @return array
+     */
+    public function getFcmTokens(): array
+    {
+        return $this->firebase_token ?? [];
+    }
+
+    /**
+     * Clear all FCM tokens
+     * 
+     * @return void
+     */
+    public function clearFcmTokens(): void
+    {
+        $this->firebase_token = [];
+    }
+
+    /**
+     * Get validation rules for firebase token
+     * 
+     * @return array
+     */
+    public static function firebaseTokenRules(): array
+    {
+        return [
+            'firebase_token' => 'required|string|min:100|max:500',
+        ];
+    }
 
     public function isOnline(): ?bool
     {

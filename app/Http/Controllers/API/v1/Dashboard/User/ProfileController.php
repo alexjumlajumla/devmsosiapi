@@ -136,28 +136,18 @@ info('this->userService->create($request->validated())',$result);
     }
 
     /**
+     * Update user's FCM token
+     *
      * @param Request $request
      * @return JsonResponse
      */
     public function fireBaseTokenUpdate(Request $request)
     {
-        $request->validate([
-            'firebase_token' => 'required|string|min:100|max:500'
-        ]);
+        $request->validate(User::firebaseTokenRules());
 
         try {
             $user = auth()->user();
-            
-            // Enhanced token validation
-            $token = $request->input('firebase_token');
-
-            // Normalize token by trimming whitespace and removing any array structure
-            if (is_array($token)) {
-                $token = collect($token)->first(function($t) {
-                    return is_string($t) && strlen(trim($t)) >= 100;
-                });
-            }
-            $token = trim($token);
+            $token = trim($request->input('firebase_token'));
 
             // Basic validation checks
             if (empty($token)) {
@@ -165,15 +155,11 @@ info('this->userService->create($request->validated())',$result);
                     'status' => false,
                     'message' => 'Token cannot be empty'
                 ], 400);
-        }
+            }
+
 
             // Strict FCM token format validation
-            // FCM tokens typically follow this pattern:
-            // - Start with a string of characters
-            // - Followed by a colon
-            // - Followed by "APA91" (Firebase Cloud Messaging identifier)
-            // - Followed by a long string of base64 characters
-            if (!preg_match('/^[A-Za-z0-9_-]+:APA91[A-Za-z0-9_-]{100,}$/', $token)) {
+            if (!preg_match('/^[A-Za-z0-9_-]+:[A-Za-z0-9_-]+$/', $token)) {
                 return response()->json([
                     'status' => false,
                     'message' => 'Invalid Firebase Cloud Messaging token format'
@@ -181,52 +167,40 @@ info('this->userService->create($request->validated())',$result);
             }
 
             // Additional security checks
-            if (
-                str_contains($token, ' ') || // No spaces allowed
-                str_contains($token, '\n') || // No newlines
-                str_contains($token, '\r') || // No carriage returns
-                strlen($token) > 500 // Max length check
-            ) {
+            if (strlen($token) < 100 || strlen($token) > 500) {
                 return response()->json([
                     'status' => false,
-                    'message' => 'Token contains invalid characters or is too long'
+                    'message' => 'Token length is invalid'
                 ], 400);
             }
 
-            // Before updating, check if this is a different token
-            if ($user->firebase_token === $token) {
-                return response()->json([
-                    'status' => true,
-                    'message' => 'Token already up to date'
-                ]);
-            }
-
-            // Update token
-        $user->update([
-                'firebase_token' => $token
-            ]);
+            // Add token to user's tokens
+            $user->addFcmToken($token);
+            $user->save();
 
             \Log::info('[FirebaseToken] Token updated successfully', [
                 'user_id' => $user->id,
                 'token_prefix' => substr($token, 0, 15) . '...',
-                'token_length' => strlen($token)
-        ]);
+                'token_count' => count($user->getFcmTokens())
+            ]);
 
             return response()->json([
                 'status' => true,
-                'message' => 'Token updated successfully'
+                'message' => 'Token updated successfully',
+                'token_count' => count($user->getFcmTokens())
             ]);
+
         } catch (\Exception $e) {
             \Log::error('[FirebaseToken] Update failed: ' . $e->getMessage(), [
                 'user_id' => auth()->id(),
-                'token_prefix' => substr($request->input('firebase_token'), 0, 15) . '...',
+                'token_prefix' => $request->has('firebase_token') ? substr($request->input('firebase_token'), 0, 15) . '...' : 'none',
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
             ]);
             
             return response()->json([
                 'status' => false,
-                'message' => 'Failed to update token'
+                'message' => 'Failed to update token: ' . $e->getMessage()
             ], 500);
         }
     }
