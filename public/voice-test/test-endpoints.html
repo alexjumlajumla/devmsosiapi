@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice API Endpoint Tester</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .endpoint { background-color: #f5f5f5; padding: 15px; margin-bottom: 15px; border-radius: 5px; }
+        .response { white-space: pre-wrap; background-color: #efefef; padding: 10px; margin-top: 10px; overflow: auto; max-height: 200px; }
+        button { padding: 8px 15px; margin-right: 10px; cursor: pointer; }
+        h3 { margin-top: 0; }
+        .success { color: green; }
+        .error { color: red; }
+    </style>
+</head>
+<body>
+    <h1>Voice API Endpoint Tester</h1>
+    <p>This tool tests various voice API endpoints to diagnose issues</p>
+
+    <div class="endpoint">
+        <h3>1. Test Transcription Only</h3>
+        <p>Tests the basic transcription endpoint without order processing</p>
+        <input type="file" id="audioFile1" accept="audio/*">
+        <button onclick="testTranscribe()">Test Transcribe</button>
+        <div id="transcribeResponse" class="response"></div>
+    </div>
+
+    <div class="endpoint">
+        <h3>2. Test Voice Test API</h3>
+        <p>Tests the simplified voice-test-api endpoint</p>
+        <input type="file" id="audioFile2" accept="audio/*">
+        <button onclick="testVoiceTestAPI()">Test Voice Test API</button>
+        <div id="voiceTestResponse" class="response"></div>
+    </div>
+
+    <div class="endpoint">
+        <h3>3. Test Full Voice Order Processing</h3>
+        <p>Tests the complete voice order processing endpoint</p>
+        <input type="file" id="audioFile3" accept="audio/*">
+        <select id="language">
+            <option value="en-US">English (US)</option>
+            <option value="sw-TZ">Swahili</option>
+        </select>
+        <button onclick="testVoiceOrder()">Test Voice Order</button>
+        <div id="voiceOrderResponse" class="response"></div>
+    </div>
+    
+    <div class="endpoint">
+        <h3>4. Debug Request Headers</h3>
+        <p>Shows what headers are being sent</p>
+        <button onclick="debugHeaders()">Debug Headers</button>
+        <div id="headersResponse" class="response"></div>
+    </div>
+
+    <script>
+        async function testTranscribe() {
+            const responseElement = document.getElementById('transcribeResponse');
+            responseElement.textContent = "Sending request...";
+            
+            const fileInput = document.getElementById('audioFile1');
+            if (!fileInput.files[0]) {
+                responseElement.textContent = "Please select an audio file";
+                responseElement.className = "response error";
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('audio', fileInput.files[0]);
+            
+            try {
+                const response = await fetch('/api/voice/transcribe', {
+                    method: 'POST',
+                    body: formData,
+                    credentials: 'include'
+                });
+                
+                const result = await response.json();
+                responseElement.textContent = JSON.stringify(result, null, 2);
+                responseElement.className = response.ok ? "response success" : "response error";
+            } catch (error) {
+                responseElement.textContent = "Error: " + error.message;
+                responseElement.className = "response error";
+            }
+        }
+        
+        async function testVoiceTestAPI() {
+            const responseElement = document.getElementById('voiceTestResponse');
+            responseElement.textContent = "Sending request...";
+            
+            const fileInput = document.getElementById('audioFile2');
+            if (!fileInput.files[0]) {
+                responseElement.textContent = "Please select an audio file";
+                responseElement.className = "response error";
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('audio', fileInput.files[0]);
+            
+            try {
+                const response = await fetch('/api/voice-test-api', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                responseElement.textContent = JSON.stringify(result, null, 2);
+                responseElement.className = response.ok ? "response success" : "response error";
+            } catch (error) {
+                responseElement.textContent = "Error: " + error.message;
+                responseElement.className = "response error";
+            }
+        }
+        
+        async function testVoiceOrder() {
+            const responseElement = document.getElementById('voiceOrderResponse');
+            responseElement.textContent = "Sending request...";
+            
+            const fileInput = document.getElementById('audioFile3');
+            if (!fileInput.files[0]) {
+                responseElement.textContent = "Please select an audio file";
+                responseElement.className = "response error";
+                return;
+            }
+            
+            const language = document.getElementById('language').value;
+            const sessionId = 'test-session-' + Date.now();
+            
+            const formData = new FormData();
+            formData.append('audio', fileInput.files[0]);
+            formData.append('language', language);
+            formData.append('session_id', sessionId);
+            
+            try {
+                // Add XSRF token from meta tag if exists
+                const token = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
+                
+                const response = await fetch('/api/voice/process', {
+                    method: 'POST',
+                    body: formData,
+                    credentials: 'include',
+                    headers: token ? {
+                        'X-CSRF-TOKEN': token
+                    } : {}
+                });
+                
+                const result = await response.json();
+                responseElement.textContent = JSON.stringify(result, null, 2);
+                responseElement.className = response.ok ? "response success" : "response error";
+            } catch (error) {
+                responseElement.textContent = "Error: " + error.message;
+                responseElement.className = "response error";
+            }
+        }
+        
+        async function debugHeaders() {
+            const responseElement = document.getElementById('headersResponse');
+            
+            // Get cookies
+            const cookies = document.cookie;
+            
+            // Get CSRF token
+            const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
+            
+            // Display
+            responseElement.textContent = `
+CSRF Token: ${csrfToken || 'Not found in meta tag'}
+Cookies: ${cookies || 'No cookies found'}
+
+User Agent: ${navigator.userAgent}
+            `;
+        }
+    </script>
+</body>
+</html> 

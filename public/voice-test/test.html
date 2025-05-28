@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice API Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        h1 {
+            color: #333;
+        }
+        button {
+            padding: 10px 15px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 10px 0;
+        }
+        .response {
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin-top: 10px;
+            background-color: #f9f9f9;
+        }
+        .error {
+            color: red;
+        }
+        .success {
+            color: green;
+        }
+    </style>
+</head>
+<body>
+    <h1>Voice API Test Tool</h1>
+    
+    <div>
+        <h2>API Endpoint Tests</h2>
+        <button id="testVoiceProcess">Test /api/voice/process</button>
+        <button id="testVoiceDialogue">Test /api/voice-dialogue/process</button>
+        <button id="testV1VoiceOrder">Test /api/v1/voice-order</button>
+        <button id="testVoiceTestApi">Test /api/voice-test-api</button>
+        
+        <div class="response" id="endpointResponse">
+            <p>API response will appear here</p>
+        </div>
+    </div>
+    
+    <div>
+        <h2>Voice Recording Test</h2>
+        <button id="recordButton">Start Recording</button>
+        <span id="recordingStatus">Not recording</span>
+        
+        <div class="response" id="recordingResponse">
+            <p>Recording results will appear here</p>
+        </div>
+    </div>
+    
+    <script>
+        // API testing functions
+        document.getElementById('testVoiceProcess').addEventListener('click', () => {
+            testEndpoint('/api/voice/process');
+        });
+        
+        document.getElementById('testVoiceDialogue').addEventListener('click', () => {
+            testEndpoint('/api/voice-dialogue/process');
+        });
+        
+        document.getElementById('testV1VoiceOrder').addEventListener('click', () => {
+            testEndpoint('/api/v1/voice-order');
+        });
+        
+        document.getElementById('testVoiceTestApi').addEventListener('click', () => {
+            testEndpoint('/api/voice-test-api');
+        });
+        
+        async function testEndpoint(url) {
+            const responseElement = document.getElementById('endpointResponse');
+            responseElement.innerHTML = `<p>Testing ${url}...</p>`;
+            
+            try {
+                // Create a simple form data with a dummy audio file
+                const formData = new FormData();
+                const dummyBlob = new Blob(['test'], { type: 'text/plain' });
+                formData.append('audio', dummyBlob, 'dummy-audio.txt');
+                formData.append('session_id', 'test-' + Date.now());
+                formData.append('language', 'en-US');
+                
+                const response = await fetch(url, {
+                    method: 'POST',
+                    body: formData,
+                    credentials: 'include'
+                });
+                
+                const status = response.status;
+                let data;
+                
+                try {
+                    data = await response.json();
+                } catch (e) {
+                    data = { error: 'Cannot parse response as JSON' };
+                }
+                
+                responseElement.innerHTML = `
+                    <p>Endpoint: <strong>${url}</strong></p>
+                    <p>Status: <span class="${status >= 200 && status < 300 ? 'success' : 'error'}">${status}</span></p>
+                    <pre>${JSON.stringify(data, null, 2)}</pre>
+                `;
+            } catch (error) {
+                responseElement.innerHTML = `
+                    <p>Endpoint: <strong>${url}</strong></p>
+                    <p class="error">Error: ${error.message}</p>
+                `;
+            }
+        }
+        
+        // Voice recording test
+        let mediaRecorder;
+        let audioChunks = [];
+        let isRecording = false;
+        
+        const recordButton = document.getElementById('recordButton');
+        const recordingStatus = document.getElementById('recordingStatus');
+        const recordingResponse = document.getElementById('recordingResponse');
+        
+        recordButton.addEventListener('click', toggleRecording);
+        
+        function toggleRecording() {
+            if (isRecording) {
+                stopRecording();
+                recordButton.textContent = 'Start Recording';
+            } else {
+                startRecording();
+                recordButton.textContent = 'Stop Recording';
+            }
+        }
+        
+        async function startRecording() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(stream);
+                audioChunks = [];
+                
+                mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+                mediaRecorder.onstop = processRecording;
+                
+                mediaRecorder.start();
+                isRecording = true;
+                recordingStatus.textContent = 'Recording...';
+                recordingStatus.className = 'success';
+            } catch (err) {
+                recordingStatus.textContent = 'Error: ' + err.message;
+                recordingStatus.className = 'error';
+                console.error('Error accessing microphone:', err);
+            }
+        }
+        
+        function stopRecording() {
+            if (mediaRecorder && isRecording) {
+                mediaRecorder.stop();
+                isRecording = false;
+                recordingStatus.textContent = 'Processing...';
+            }
+        }
+        
+        async function processRecording() {
+            const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+            const audioUrl = URL.createObjectURL(audioBlob);
+            
+            // Create audio player
+            const audioPlayer = document.createElement('audio');
+            audioPlayer.controls = true;
+            audioPlayer.src = audioUrl;
+            
+            recordingResponse.innerHTML = '<p>Recording completed! Test it with each endpoint:</p>';
+            recordingResponse.appendChild(audioPlayer);
+            
+            // Create buttons for testing with each endpoint
+            const endpoints = [
+                '/api/voice/process',
+                '/api/voice-dialogue/process',
+                '/api/v1/voice-order',
+                '/api/voice-test-api'
+            ];
+            
+            endpoints.forEach(endpoint => {
+                const button = document.createElement('button');
+                button.textContent = `Test with ${endpoint}`;
+                button.addEventListener('click', () => {
+                    testWithRecording(endpoint, audioBlob);
+                });
+                recordingResponse.appendChild(button);
+            });
+            
+            recordingStatus.textContent = 'Recording completed';
+        }
+        
+        async function testWithRecording(endpoint, audioBlob) {
+            const resultDiv = document.createElement('div');
+            resultDiv.className = 'response';
+            resultDiv.innerHTML = `<p>Testing ${endpoint} with recording...</p>`;
+            recordingResponse.appendChild(resultDiv);
+            
+            try {
+                const formData = new FormData();
+                formData.append('audio', audioBlob, 'recording.webm');
+                formData.append('session_id', 'test-' + Date.now());
+                formData.append('language', 'en-US');
+                
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    body: formData,
+                    credentials: 'include'
+                });
+                
+                const status = response.status;
+                let data;
+                
+                try {
+                    data = await response.json();
+                } catch (e) {
+                    data = { error: 'Cannot parse response as JSON' };
+                }
+                
+                resultDiv.innerHTML = `
+                    <p>Endpoint: <strong>${endpoint}</strong></p>
+                    <p>Status: <span class="${status >= 200 && status < 300 ? 'success' : 'error'}">${status}</span></p>
+                    <pre>${JSON.stringify(data, null, 2)}</pre>
+                `;
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <p>Endpoint: <strong>${endpoint}</strong></p>
+                    <p class="error">Error: ${error.message}</p>
+                `;
+            }
+        }
+    </script>
+</body>
+</html> 

@@ -1,0 +1,62 @@
+{
+    "openapi": "3.0.0",
+    "info": {
+        "title": "JumlaJumla API",
+        "description": "API documentation for the JumlaJumla backend services",
+        "contact": {
+            "email": "support@jumlajumla.com"
+        },
+        "version": "1.0.0"
+    },
+    "paths": {
+        "/api/v1/voice-order": {
+            "post": {
+                "tags": [
+                    "Voice Orders"
+                ],
+                "summary": "Submit a voice-based order",
+                "operationId": "voiceOrder",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "multipart/form-data": {
+                            "schema": {
+                                "required": [
+                                    "audio"
+                                ],
+                                "properties": {
+                                    "audio": {
+                                        "type": "string",
+                                        "format": "binary"
+                                    },
+                                    "language": {
+                                        "type": "string",
+                                        "example": "en-US"
+                                    }
+                                },
+                                "type": "object"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Voice order placed successfully"
+                    },
+                    "422": {
+                        "description": "Validation failed"
+                    },
+                    "500": {
+                        "description": "Server error"
+                    }
+                }
+            }
+        }
+    },
+    "tags": [
+        {
+            "name": "Voice Orders",
+            "description": "Voice Orders"
+        }
+    ]
+}

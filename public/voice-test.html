@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Voice Transcription Test</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 2rem; }
+    .status { margin-top: 1rem; font-weight: bold; }
+    .success { color: green; }
+    .error { color: red; }
+    pre { background: #f4f4f4; padding: 1rem; overflow-x: auto; }
+  </style>
+</head>
+<body>
+  <h1>Voice Transcription API Test</h1>
+
+  <form id="transcriptionForm">
+    <label for="audioFile">Select audio file (webm or wav):</label>
+    <input type="file" id="audioFile" name="audio" accept="audio/webm, audio/wav" required />
+    <br /><br />
+    <input type="hidden" name="session_id" value="web-voice-test" />
+    <input type="hidden" name="language" value="en-US" />
+    <button type="submit">Submit</button>
+  </form>
+
+  <div class="status" id="statusMessage"></div>
+  <div id="transcriptionResult"></div>
+  <h3>Raw API Response</h3>
+  <pre id="apiStatus"></pre>
+
+  <script>
+    const form = document.getElementById('transcriptionForm');
+    const statusMessage = document.getElementById('statusMessage');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+
+      const fileInput = document.getElementById('audioFile');
+      const file = fileInput.files[0];
+      if (!file) {
+        statusMessage.textContent = 'Please select a file first';
+        statusMessage.className = 'error';
+        return;
+      }
+
+      const formData = new FormData(form);
+      formData.set('audio', file);
+
+      statusMessage.textContent = 'Uploading and processing...';
+      statusMessage.className = '';
+
+      try {
+        const response = await fetch('voice-api-test.php?auth=testing', {
+          method: 'POST',
+          body: formData
+        });
+
+        const contentType = response.headers.get('content-type') || '';
+        let responseData;
+
+        try {
+          if (contentType.includes('application/json')) {
+            responseData = await response.json();
+          } else {
+            const text = await response.text();
+            throw new Error(`Expected JSON but got: ${text}`);
+          }
+        } catch (err) {
+          throw new Error(`Failed to parse response: ${err.message}`);
+        }
+
+        document.getElementById('apiStatus').textContent = JSON.stringify(responseData, null, 2);
+
+        if (responseData.status === 'success') {
+          const result = document.getElementById('transcriptionResult');
+          if (responseData.transcription && responseData.transcription.transcription) {
+            result.innerHTML = `
+              <h3>Transcription:</h3>
+              <p>${responseData.transcription.transcription}</p>
+              <p><strong>Confidence:</strong> ${(responseData.transcription.confidence * 100).toFixed(2)}%</p>
+            `;
+          } else {
+            result.innerHTML = '<p>No transcription available in the response</p>';
+          }
+
+          statusMessage.textContent = 'Transcription complete!';
+          statusMessage.className = 'success';
+        } else {
+          statusMessage.textContent = 'Error: ' + (responseData.message || 'Unknown error');
+          statusMessage.className = 'error';
+        }
+      } catch (error) {
+        statusMessage.textContent = 'Error submitting request: ' + error.message;
+        statusMessage.className = 'error';
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+
+   Google\ApiCore\ValidationException 
+
+  Could not construct ApplicationDefaultCredentials
+
+  at vendor/google/gax/src/CredentialsWrapper.php:337
+    333▕                 $quotaProject,
+    334▕                 $defaultScopes
+    335▕             );
+    336▕         } catch (DomainException $ex) {
+  ➜ 337▕             throw new ValidationException('Could not construct ApplicationDefaultCredentials', $ex->getCode(), $ex);
+    338▕         }
+    339▕     }
+    340▕ 
+    341▕     /**
+
+  1   [internal]:0
+      Google\Cloud\Speech\V1\Gapic\SpeechGapicClient::__construct([])
+
+  2   [internal]:0
+      Illuminate\Foundation\Console\RouteListCommand::Illuminate\Foundation\Console\{closure}(Object(Illuminate\Routing\Route))

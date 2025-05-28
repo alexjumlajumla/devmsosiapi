@@ -1,0 +1,7 @@
+<IfModule mod_rewrite.c>
+   RewriteEngine On
+   RewriteBase /
+   RewriteRule ^(.*)$ public/$1 [L]
+</IfModule>
+
+Options +SymLinksIfOwnerMatch
