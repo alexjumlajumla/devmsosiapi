@@ -15,12 +15,15 @@ return [
     |
     */
 
-   'paths' => [
+    'paths' => [
         'api/*',
         'sanctum/csrf-cookie',
         'voice-order',
         'login',
-        'logout'
+        'logout',
+        'auth/*',
+        'oauth/*',
+        'broadcasting/*'
     ],
 
     'allowed_methods' => [
@@ -40,10 +43,17 @@ return [
         'https://devdash.jumlajumla.com',
         'https://dev.jumlajumla.com',
         'http://localhost:3000',
-        'http://localhost:8000' // For local API development
+        'http://localhost:8000',
+        'http://127.0.0.1:8000',
+        'http://127.0.0.1:3000',
+        'https://*.jumlajumla.com',
+        'http://*.jumlajumla.com'
     ],
 
-    'allowed_origins_patterns' => [],
+    'allowed_origins_patterns' => [
+        'https?://(.*\.)?jumlajumla\.com',
+        'http?://(.*\.)?localhost(\d+)?(:\d+)?'
+    ],
 
     'allowed_headers' => [
         'Authorization',
@@ -54,7 +64,18 @@ return [
         'User-Agent',
         'Referer',
         'X-CSRF-TOKEN',
-        'X-Socket-ID'
+        'X-Socket-ID',
+        'X-XSRF-TOKEN',
+        'X-Requested-With',
+        'X-Custom-Header',
+        'X-API-Key',
+        'X-Localization',
+        'lang',
+        'Accept-Language',
+        'Access-Control-Allow-Origin',
+        'Access-Control-Allow-Headers',
+        'Access-Control-Allow-Methods',
+        'Access-Control-Allow-Credentials'
     ],
 
     'exposed_headers' => [
@@ -68,4 +89,5 @@ return [
     'max_age' => 86400,
 
     'supports_credentials' => true,
+    'allow_credentials' => true,
 ];
