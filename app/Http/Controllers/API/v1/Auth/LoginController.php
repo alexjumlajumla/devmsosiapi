@@ -98,14 +98,21 @@ class LoginController extends Controller
                 'token_created' => true
             ]);
 
-            return $this->successResponse(
-                __('errors.' . ResponseError::SUCCESS, locale: $this->language),
-                [
+            // Format the response to match frontend expectations
+            $response = [
+                'timestamp' => now(),
+                'status' => true,
+                'message' => __('errors.' . ResponseError::SUCCESS, locale: $this->language),
+                'data' => [
                     'access_token'  => $token,
                     'token_type'    => 'Bearer',
                     'user'          => UserResource::make($user->loadMissing(['shop', 'model'])),
                 ]
-            );
+            ];
+
+            \Log::debug('Login response', ['response' => $response]);
+            
+            return response()->json($response, 200);
 
         } catch (\Exception $e) {
             \Log::error('Login error: ' . $e->getMessage(), [
@@ -202,11 +209,21 @@ class LoginController extends Controller
                 'token_created' => true
             ]);
 
-            return $this->successResponse('User successfully logged in', [
-                'access_token'  => $token,
-                'token_type'    => 'Bearer',
-                'user'          => UserResource::make($user->loadMissing(['shop', 'model'])),
-            ]);
+            // Format the response to match frontend expectations
+            $response = [
+                'timestamp' => now(),
+                'status' => true,
+                'message' => 'User successfully logged in',
+                'data' => [
+                    'access_token'  => $token,
+                    'token_type'    => 'Bearer',
+                    'user'          => UserResource::make($user->loadMissing(['shop', 'model'])),
+                ]
+            ];
+
+            \Log::debug('Phone login response', ['response' => $response]);
+            
+            return response()->json($response, 200);
 
         } catch (\Exception $e) {
             \Log::error('Phone login error: ' . $e->getMessage(), [
