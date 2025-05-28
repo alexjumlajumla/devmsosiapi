@@ -123,46 +123,24 @@ trait Notification
                         }
 
                         Log::debug('Sending FCM notification', [
-                            'receiver' => substr($receiver, 0, 10) . '...' . substr($receiver, -5),
-                            'title' => $firebaseTitle ?? $title,
-                            'message' => $message,
-                            'data' => [
-                                'id' => (string)($data['id'] ?? ''),
-                                'status' => (string)($data['status'] ?? ''),
-                                'type' => (string)($data['type'] ?? '')
-                            ]
-                        ]);
 
-                        // Send notification to FCM
-                        $response = Http::withHeaders($headers)->post($url, [
-                            'message' => [
-                                'token' => $receiver,
-                                'notification' => [
-                                    'title' => $firebaseTitle ?? $title,
-                                    'body'  => $message,
-                                ],
-                                'data' => [
-                                    'id'     => (string)($data['id'] ?? ''),
-                                    'status' => (string)($data['status'] ?? ''),
-                                    'type'   => (string)($data['type'] ?? '')
-                                ],
-                                'android' => [
-                                    'notification' => [
-                                        'sound' => 'default',
-                                    ]
-                                ],
-                                'apns' => [
-                                    'payload' => [
-                                        'aps' => [
-                                            'sound' => 'default'
-                                        ]
-                                    ]
-                                ]
-                            ]
-                        ]);
+                    Log::debug('Sending FCM request', ['payload' => $logPayload]);
 
-                        Log::debug('FCM response received', [
-                            'receiver' => substr($receiver, 0, 10) . '...' . substr($receiver, -5),
+                    try {
+                        $response = $http->post($url, $payload);
+                        $responseData = $response->json();
+                        $responses[] = $responseData;
+                        
+                        // Log the response without exposing tokens in production
+                        $logResponse = $responseData;
+                        if (isset($logResponse['results']) && is_array($logResponse['results'])) {
+                            $logResponse['results'] = array_map(function($result) {
+                                unset($result['message_id']);
+                                return $result;
+                            }, $logResponse['results']);
+                        }
+                        
+                        Log::debug('FCM response', [
                             'status' => $response->status(),
                             'body' => $response->body()
                         ]);

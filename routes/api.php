@@ -459,6 +459,13 @@ Route::group(['prefix' => 'v1', 'middleware' => ['block.ip']], function () {
 			/* RequestModel */
 			Route::apiResource('request-models',		User\RequestModelController::class);
 
+            /* FCM Token Management */
+            Route::group(['prefix' => 'fcm-tokens'], function () {
+                Route::put('/', [\App\Http\Controllers\API\v1\User\FcmTokenController::class, 'update']);
+                Route::delete('/', [\App\Http\Controllers\API\v1\User\FcmTokenController::class, 'destroy']);
+                Route::delete('/clear', [\App\Http\Controllers\API\v1\User\FcmTokenController::class, 'clear']);
+            });
+
             /* Ticket */
             Route::get('tickets/paginate',                      [User\TicketController::class, 'paginate']);
             Route::apiResource('tickets',             User\TicketController::class);

@@ -210,80 +210,92 @@ class User extends Authenticatable implements MustVerifyEmail
     /**
      * Add a new FCM token to the user's tokens
      *
-     * @param string $token
-     * @return void
+     * @param string $token The FCM token to add
+     * @return bool True if token was added, false if it was a duplicate
+     * @throws \InvalidArgumentException If token is invalid
      */
-    public function addFcmToken(string $token): void
+    public function addFcmToken(string $token): bool
     {
-        // Ensure we have an array, even if the database has a string or null
-        $tokens = $this->firebase_token;
-        
-        // If it's not an array, initialize as an empty array
-        if (!is_array($tokens)) {
-            $tokens = [];
+        if (!$this->isValidFcmToken($token)) {
+            throw new \InvalidArgumentException('Invalid FCM token format');
         }
         
-        // If it's a string, convert it to an array with that single value
-        if (is_string($tokens)) {
-            $tokens = [$tokens];
-        }
+        $tokens = $this->getFcmTokens();
         
         // Don't add duplicate tokens
-        if (!in_array($token, $tokens, true)) {
-            $tokens[] = $token;
-            $this->firebase_token = array_values(array_unique($tokens));
+        if (in_array($token, $tokens, true)) {
+            return false;
         }
+        
+        $tokens[] = $token;
+        $this->firebase_token = array_values(array_unique($tokens));
+        
+        return true;
     }
 
     /**
      * Remove an FCM token
      * 
-     * @param string $token
-     * @return void
+     * @param string $token The FCM token to remove
+     * @return bool True if token was removed, false if it didn't exist
      */
-    public function removeFcmToken(string $token): void
+    public function removeFcmToken(string $token): bool
     {
-        // Ensure we have an array, even if the database has a string or null
-        $tokens = $this->firebase_token;
-        
-        // If it's not an array, initialize as an empty array
-        if (!is_array($tokens)) {
-            $tokens = [];
-        }
-        
-        // If it's a string, convert it to an array with that single value
-        if (is_string($tokens)) {
-            $tokens = [$tokens];
-        }
+        $tokens = $this->getFcmTokens();
+        $countBefore = count($tokens);
         
         // Filter out the token to be removed
-        $this->firebase_token = array_values(array_filter($tokens, fn($t) => $t !== $token));
+        $tokens = array_values(array_filter($tokens, fn($t) => $t !== $token));
+        
+        if (count($tokens) === $countBefore) {
+            return false; // Token didn't exist
+        }
+        
+        $this->firebase_token = $tokens;
+        return true;
     }
 
     /**
-     * Get all FCM tokens
+     * Get all valid FCM tokens for this user
      * 
-     * @return array
+     * @return array Array of valid FCM tokens
      */
     public function getFcmTokens(): array
     {
-        $tokens = $this->firebase_token;
+        $tokens = $this->firebase_token ?? [];
         
-        // If it's not an array, initialize as an empty array
-        if (!is_array($tokens)) {
-            $tokens = [];
-        }
-        
-        // If it's a string, convert it to an array with that single value
+        // Convert to array if it's a string (for backward compatibility)
         if (is_string($tokens)) {
             $tokens = [$tokens];
         }
         
-        return $tokens;
+        // Ensure we have an array
+        if (!is_array($tokens)) {
+            return [];
+        }
+        
+        // Filter out any invalid tokens
+        return array_values(array_filter($tokens, [$this, 'isValidFcmToken']));
     }
 
     /**
-     * Clear all FCM tokens
+     * Check if a token is a valid FCM token
+     * 
+     * @param mixed $token The token to validate
+     * @return bool True if valid, false otherwise
+     */
+    public function isValidFcmToken($token): bool
+    {
+        if (!is_string($token) || strlen($token) < 100 || strlen($token) > 500) {
+            return false;
+        }
+        
+        // Basic format validation for FCM tokens
+        return (bool) preg_match('/^[a-zA-Z0-9_\-:]+$/', $token);
+    }
+
+    /**
+     * Clear all FCM tokens for this user
      * 
      * @return void
      */
@@ -291,7 +303,7 @@ class User extends Authenticatable implements MustVerifyEmail
     {
         $this->firebase_token = [];
     }
-
+    
     /**
      * Get validation rules for firebase token
      * 
@@ -300,7 +312,17 @@ class User extends Authenticatable implements MustVerifyEmail
     public static function firebaseTokenRules(): array
     {
         return [
-            'firebase_token' => 'required|string|min:100|max:500',
+            'token' => [
+                'required',
+                'string',
+                'min:100',
+                'max:500',
+                function ($attribute, $value, $fail) {
+                    if (!preg_match('/^[a-zA-Z0-9_\-:]+$/', $value)) {
+                        $fail('The FCM token format is invalid.');
+                    }
+                },
+            ],
         ];
     }
 
