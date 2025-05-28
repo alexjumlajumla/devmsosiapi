@@ -182,29 +182,39 @@ class FcmTokenService
      */
     public function getTokensForNotifiable($notifiable): array
     {
-        if ($notifiable instanceof User) {
-            return $notifiable->getFcmTokens();
-        }
-        
-        if (method_exists($notifiable, 'getFcmTokens')) {
-            return $notifiable->getFcmTokens();
-        }
-        
-        if (isset($notifiable->firebase_token)) {
-            $tokens = $notifiable->firebase_token;
-            
-            if (is_string($tokens)) {
-                return [$tokens];
+        try {
+            if ($notifiable instanceof User) {
+                return $notifiable->getFcmTokens();
             }
             
-            if (is_array($tokens)) {
-                return array_values(array_filter($tokens, function($token) {
-                    return is_string($token) && $this->isValidFcmToken($token);
-                }));
+            if (method_exists($notifiable, 'getFcmTokens')) {
+                return $notifiable->getFcmTokens();
             }
+            
+            if (isset($notifiable->firebase_token)) {
+                $tokens = $notifiable->firebase_token;
+                
+                if (is_string($tokens)) {
+                    return $this->isValidFcmToken($tokens) ? [$tokens] : [];
+                }
+                
+                if (is_array($tokens)) {
+                    return array_values(array_filter($tokens, function($token) {
+                        return is_string($token) && $this->isValidFcmToken($token);
+                    }));
+                }
+            }
+            
+            return [];
+        } catch (\Exception $e) {
+            \Log::error('Error getting FCM tokens for notifiable', [
+                'notifiable_type' => get_class($notifiable),
+                'notifiable_id' => $notifiable->id ?? null,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            return [];
         }
-        
-        return [];
     }
     
     /**

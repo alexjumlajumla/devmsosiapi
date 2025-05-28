@@ -59,34 +59,35 @@ trait HasNotifications
     }
 
     /**
+     * Get the notification routing information for the FCM channel.
+     * This method is used by the FcmChannel to get the FCM tokens.
+     *
+     * @return array
+     */
+    public function routeNotificationForFcm()
+    {
+        return $this->fcm_tokens ?? [];
+    }
+
+    /**
      * Get the notification routing information for the given channel.
+     * This is a fallback method that won't conflict with Laravel's Notifiable trait.
      *
      * @param  string  $channel
      * @param  \Illuminate\Notifications\Notification|null  $notification
      * @return mixed
      */
-    public function routeNotificationFor($channel, $notification = null)
+    public function getNotificationRouting($channel, $notification = null)
     {
         if ($channel === 'fcm') {
-            return $this->fcm_tokens ?? [];
+            return $this->routeNotificationForFcm();
         }
 
-        $class = 'routeNotificationFor'.Str::studly($channel);
-        if (method_exists($this, $class)) {
-            return $this->{$class}($notification);
+        $method = 'routeNotificationFor'.Str::studly($channel);
+        if (method_exists($this, $method)) {
+            return $this->{$method}($notification);
         }
 
-        $class = str_replace('\\', '', Str::snake((new \ReflectionClass($this))->getShortName()));
-        
-        switch ($class) {
-            case 'user':
-                return $this->fcm_tokens ?? [];
-            case 'admin':
-                return $this->fcm_tokens ?? [];
-            case 'seller':
-                return $this->fcm_tokens ?? [];
-            default:
-                return [];
-        }
+        return [];
     }
 }
