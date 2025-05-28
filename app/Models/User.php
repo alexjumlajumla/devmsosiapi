@@ -215,7 +215,18 @@ class User extends Authenticatable implements MustVerifyEmail
      */
     public function addFcmToken(string $token): void
     {
-        $tokens = $this->firebase_token ?? [];
+        // Ensure we have an array, even if the database has a string or null
+        $tokens = $this->firebase_token;
+        
+        // If it's not an array, initialize as an empty array
+        if (!is_array($tokens)) {
+            $tokens = [];
+        }
+        
+        // If it's a string, convert it to an array with that single value
+        if (is_string($tokens)) {
+            $tokens = [$tokens];
+        }
         
         // Don't add duplicate tokens
         if (!in_array($token, $tokens, true)) {
@@ -232,7 +243,20 @@ class User extends Authenticatable implements MustVerifyEmail
      */
     public function removeFcmToken(string $token): void
     {
-        $tokens = $this->firebase_token ?? [];
+        // Ensure we have an array, even if the database has a string or null
+        $tokens = $this->firebase_token;
+        
+        // If it's not an array, initialize as an empty array
+        if (!is_array($tokens)) {
+            $tokens = [];
+        }
+        
+        // If it's a string, convert it to an array with that single value
+        if (is_string($tokens)) {
+            $tokens = [$tokens];
+        }
+        
+        // Filter out the token to be removed
         $this->firebase_token = array_values(array_filter($tokens, fn($t) => $t !== $token));
     }
 
@@ -243,7 +267,19 @@ class User extends Authenticatable implements MustVerifyEmail
      */
     public function getFcmTokens(): array
     {
-        return $this->firebase_token ?? [];
+        $tokens = $this->firebase_token;
+        
+        // If it's not an array, initialize as an empty array
+        if (!is_array($tokens)) {
+            $tokens = [];
+        }
+        
+        // If it's a string, convert it to an array with that single value
+        if (is_string($tokens)) {
+            $tokens = [$tokens];
+        }
+        
+        return $tokens;
     }
 
     /**
