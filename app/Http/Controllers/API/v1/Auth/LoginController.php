@@ -119,12 +119,30 @@ class LoginController extends Controller
                     'user' => $userData,
                 ];
 
+                // Log the complete response structure
                 \Log::debug('Login response prepared', [
                     'user_id' => $user->id,
-                    'response_keys' => array_keys($response)
+                    'response_keys' => array_keys($response),
+                    'response_data' => $response
                 ]);
-                
-                return response()->json($response, 200, [], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+
+                // Convert to JSON and log the result
+                $jsonResponse = json_encode($response, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+                \Log::debug('JSON response prepared', [
+                    'user_id' => $user->id,
+                    'json_response' => $jsonResponse,
+                    'json_last_error' => json_last_error(),
+                    'json_last_error_msg' => json_last_error_msg()
+                ]);
+
+                if ($jsonResponse === false) {
+                    throw new \RuntimeException('Failed to encode JSON: ' . json_last_error_msg());
+                }
+
+                return response($jsonResponse, 200, [
+                    'Content-Type' => 'application/json',
+                    'Content-Length' => strlen($jsonResponse)
+                ]);
                 
             } catch (\Exception $e) {
                 \Log::error('Error preparing login response', [
@@ -256,12 +274,30 @@ class LoginController extends Controller
                     'user' => $userData,
                 ];
 
+                // Log the complete response structure
                 \Log::debug('Phone login response prepared', [
                     'user_id' => $user->id,
-                    'response_keys' => array_keys($response)
+                    'response_keys' => array_keys($response),
+                    'response_data' => $response
                 ]);
-                
-                return response()->json($response, 200, [], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+
+                // Convert to JSON and log the result
+                $jsonResponse = json_encode($response, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+                \Log::debug('Phone login JSON response prepared', [
+                    'user_id' => $user->id,
+                    'json_response' => $jsonResponse,
+                    'json_last_error' => json_last_error(),
+                    'json_last_error_msg' => json_last_error_msg()
+                ]);
+
+                if ($jsonResponse === false) {
+                    throw new \RuntimeException('Failed to encode JSON: ' . json_last_error_msg());
+                }
+
+                return response($jsonResponse, 200, [
+                    'Content-Type' => 'application/json',
+                    'Content-Length' => strlen($jsonResponse)
+                ]);
                 
             } catch (\Exception $e) {
                 \Log::error('Error preparing phone login response', [
