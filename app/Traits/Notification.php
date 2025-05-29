@@ -456,13 +456,12 @@ trait Notification
                     Log::error('Failed to send legacy FCM notification', [
                         'status' => $response->status(),
                         'response' => $responseData,
-                        'payload' => $logPayload
-                        $message, 
-                        $data, 
-                        $userIds, 
-                        $firebaseTitle,
-                        false // Prevent infinite retry loop
-                    );
+                        'payload' => $logPayload,
+                        'message' => $message,
+                        'data' => $data,
+                        'user_ids' => $userIds,
+                        'firebase_title' => $firebaseTitle
+                    ]);
                 }
             }
         }
