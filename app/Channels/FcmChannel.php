@@ -45,7 +45,12 @@ class FcmChannel
         // Verify Firebase authentication is working
         try {
             $auth = app('firebase.auth');
-            $auth->getApiClient(); // This will throw an exception if authentication fails
+            // Use listUsers() with a small limit to test the connection
+            // This is more reliable than getApiClient() which was removed in newer versions
+            $auth->listUsers(1, 1);
+            
+            Log::debug('Firebase authentication successful');
+            
         } catch (\Exception $e) {
             Log::error('Firebase authentication failed', [
                 'error' => $e->getMessage(),
@@ -55,7 +60,11 @@ class FcmChannel
             // Check if it's an authentication error that we can recover from
             if (str_contains($e->getMessage(), 'invalid_grant') || 
                 str_contains($e->getMessage(), 'invalid_credentials') ||
-                str_contains($e->getMessage(), 'unsupported_grant_type')) {
+                str_contains($e->getMessage(), 'unsupported_grant_type') ||
+                str_contains($e->getMessage(), '401') ||
+                str_contains($e->getMessage(), '403')) {
+                
+                Log::warning('Attempting to reinitialize Firebase due to authentication error');
                 
                 // Try to reinitialize the Firebase app
                 try {
