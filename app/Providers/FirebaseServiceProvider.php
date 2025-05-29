@@ -117,8 +117,8 @@ class FirebaseServiceProvider extends ServiceProvider
     protected function getServiceAccountConfig(): array
     {
         // Try to load from environment variables first
-        $required = [
-            'project_id' => config('fcm.project_id'),
+        $config = [
+            'project_id' => env('FIREBASE_PROJECT_ID', config('fcm.project_id', 'msosijumla')),
             'private_key_id' => env('FIREBASE_PRIVATE_KEY_ID'),
             'private_key' => env('FIREBASE_PRIVATE_KEY'),
             'client_email' => env('FIREBASE_CLIENT_EMAIL'),
@@ -126,26 +126,36 @@ class FirebaseServiceProvider extends ServiceProvider
             'client_cert_url' => env('FIREBASE_CLIENT_CERT_URL'),
         ];
         
+        // Log the configuration for debugging
+        \Log::debug('Firebase configuration loaded', [
+            'has_project_id' => !empty($config['project_id']),
+            'has_private_key_id' => !empty($config['private_key_id']),
+            'has_private_key' => !empty($config['private_key']),
+            'has_client_email' => !empty($config['client_email']),
+            'has_client_id' => !empty($config['client_id']),
+            'has_client_cert_url' => !empty($config['client_cert_url']),
+        ]);
+        
         $missing = [];
-        foreach ($required as $key => $value) {
+        foreach ($config as $key => $value) {
             if (empty($value)) {
                 $missing[] = $key;
             }
         }
         
-        // If all required environment variables are set, use them
+        // If all required configuration values are set, use them
         if (empty($missing)) {
             return [
                 'type' => 'service_account',
-                'project_id' => $required['project_id'],
-                'private_key_id' => $required['private_key_id'],
-                'private_key' => str_replace('\\n', "\n", $required['private_key']),
-                'client_email' => $required['client_email'],
-                'client_id' => $required['client_id'],
+                'project_id' => $config['project_id'],
+                'private_key_id' => $config['private_key_id'],
+                'private_key' => str_replace('\\n', "\n", $config['private_key']),
+                'client_email' => $config['client_email'],
+                'client_id' => $config['client_id'],
                 'auth_uri' => 'https://accounts.google.com/o/oauth2/auth',
                 'token_uri' => 'https://oauth2.googleapis.com/token',
                 'auth_provider_x509_cert_url' => 'https://www.googleapis.com/oauth2/v1/certs',
-                'client_x509_cert_url' => $required['client_cert_url'],
+                'client_x509_cert_url' => $config['client_cert_url'],
                 'universe_domain' => 'googleapis.com',
             ];
         }
@@ -168,11 +178,20 @@ class FirebaseServiceProvider extends ServiceProvider
         }
         
         // If we get here, no valid configuration was found
-        throw new \RuntimeException(sprintf(
-            'Missing required Firebase configuration. Either set all required environment variables or place a service account JSON file at %s. Missing: %s',
-            $serviceAccountPath,
-            implode(', ', $missing)
-        ));
+        $errorMessage = sprintf(
+            'Missing required Firebase configuration. Missing: %s. Please set FIREBASE_PROJECT_ID and other required environment variables or place a service account JSON file at %s',
+            implode(', ', $missing),
+            $serviceAccountPath
+        );
+        
+        \Log::error($errorMessage, [
+            'missing_keys' => $missing,
+            'config' => array_keys(array_filter($config, function($value) {
+                return !empty($value);
+            }))
+        ]);
+        
+        throw new \RuntimeException($errorMessage);
     }
 
     /**
