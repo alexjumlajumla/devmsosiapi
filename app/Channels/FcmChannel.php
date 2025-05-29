@@ -41,6 +41,36 @@ class FcmChannel
             ]);
             return;
         }
+        
+        // Verify Firebase authentication is working
+        try {
+            $auth = app('firebase.auth');
+            $auth->getApiClient(); // This will throw an exception if authentication fails
+        } catch (\Exception $e) {
+            Log::error('Firebase authentication failed', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            
+            // Check if it's an authentication error that we can recover from
+            if (str_contains($e->getMessage(), 'invalid_grant') || 
+                str_contains($e->getMessage(), 'invalid_credentials') ||
+                str_contains($e->getMessage(), 'unsupported_grant_type')) {
+                
+                // Try to reinitialize the Firebase app
+                try {
+                    $this->reinitializeFirebaseApp();
+                } catch (\Exception $reinitEx) {
+                    Log::critical('Failed to reinitialize Firebase app', [
+                        'error' => $reinitEx->getMessage(),
+                        'trace' => $reinitEx->getTraceAsString(),
+                    ]);
+                    return; // Give up if we can't reinitialize
+                }
+            } else {
+                return; // Unknown error, give up
+            }
+        }
 
         // Get the FCM message data from the notification
         $fcmMessage = $notification->toFcm($notifiable);
@@ -100,13 +130,44 @@ class FcmChannel
                     'error' => 'Token not registered: ' . $e->getMessage(),
                 ];
             } catch (\Kreait\Firebase\Exception\Messaging\AuthenticationError $e) {
+                $errorMessage = $e->getMessage();
                 Log::error('FCM authentication error', [
                     'token' => $token,
-                    'error' => $e->getMessage(),
+                    'error' => $errorMessage,
                 ]);
+                
+                // If it's a token error, try to refresh the token
+                if (str_contains($errorMessage, 'invalid_grant') || 
+                    str_contains($errorMessage, 'invalid_credentials') ||
+                    str_contains($errorMessage, 'unsupported_grant_type')) {
+                    
+                    try {
+                        $this->reinitializeFirebaseApp();
+                        
+                        // Retry sending the message
+                        $message = $this->prepareMessage($fcmMessage);
+                        $message = $message->withChangedTarget('token', $token);
+                        $response = app('firebase.messaging')->send($message);
+                        
+                        $results[$token] = [
+                            'success' => true,
+                            'message_id' => $response,
+                            'retry_success' => true,
+                        ];
+                        continue; // Skip to next token
+                        
+                    } catch (\Exception $retryEx) {
+                        Log::error('Failed to retry FCM notification after reinitialization', [
+                            'token' => $token,
+                            'error' => $retryEx->getMessage(),
+                            'trace' => $retryEx->getTraceAsString(),
+                        ]);
+                    }
+                }
+                
                 $results[$token] = [
                     'success' => false,
-                    'error' => 'Authentication error: ' . $e->getMessage(),
+                    'error' => 'Authentication error: ' . $errorMessage,
                 ];
             } catch (\Exception $e) {
                 Log::error('Failed to send FCM notification', [
@@ -145,6 +206,42 @@ class FcmChannel
         }
     }
 
+    /**
+     * Prepare the FCM message with proper configuration.
+     *
+     * @param  mixed  $fcmMessage
+     * @return \Kreait\Firebase\Messaging\Message
+     */
+    /**
+     * Reinitialize the Firebase application
+     * 
+     * @throws \RuntimeException If reinitialization fails
+     */
+    protected function reinitializeFirebaseApp()
+    {
+        try {
+            // Clear any existing Firebase instances
+            $this->app->forgetInstance('firebase');
+            $this->app->forgetInstance('firebase.auth');
+            $this->app->forgetInstance('firebase.messaging');
+            
+            // Rebind the Firebase service provider
+            $provider = new \App\Providers\FirebaseServiceProvider($this->app);
+            $provider->register();
+            $provider->boot();
+            
+            Log::info('Successfully reinitialized Firebase application');
+            
+        } catch (\Exception $e) {
+            Log::error('Failed to reinitialize Firebase application', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            
+            throw new \RuntimeException('Failed to reinitialize Firebase application: ' . $e->getMessage(), 0, $e);
+        }
+    }
+    
     /**
      * Prepare the FCM message with proper configuration.
      *

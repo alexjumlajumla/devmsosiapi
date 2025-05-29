@@ -17,6 +17,7 @@ class Kernel extends ConsoleKernel
         Commands\CleanupNotifications::class,
         Commands\RetryFailedNotificationsCommand::class,
         Commands\TestNotificationSystem::class,
+        Commands\InspectFcmToken::class,
     ];
 
 	/**

@@ -27,6 +27,59 @@ return [
     'storage_bucket' => env('FIREBASE_STORAGE_BUCKET', 'msosijumla.appspot.com'),
     'database_url' => env('FIREBASE_DATABASE_URL', 'https://msosijumla-default-rtdb.firebaseio.com'),
     
+    // FCM Configuration
+    'driver' => 'fcm',
+    'key' => env('FCM_SERVER_KEY'),
+    'sender_id' => env('FCM_SENDER_ID'),
+    'server_key' => env('FCM_SERVER_KEY'),
+    'project_id' => env('FIREBASE_PROJECT_ID'),
+    'database_url' => env('FIREBASE_DATABASE_URL'),
+    'messaging_id' => env('FIREBASE_MESSAGING_SENDER_ID'),
+    'storage_bucket' => env('FIREBASE_STORAGE_BUCKET'),
+    'app_id' => env('FIREBASE_APP_ID'),
+    'measurement_id' => env('FIREBASE_MEASUREMENT_ID'),
+    'api_key' => env('FIREBASE_API_KEY'),
+    'auth_domain' => env('FIREBASE_AUTH_DOMAIN'),
+    'vapid_key' => env('FIREBASE_VAPID_KEY'),
+    
+    // Service account credentials
+    'service_account' => [
+        'type' => 'service_account',
+        'project_id' => env('FIREBASE_PROJECT_ID'),
+        'private_key_id' => env('FIREBASE_PRIVATE_KEY_ID'),
+        'private_key' => str_replace('\\n', "\n", env('FIREBASE_PRIVATE_KEY', '')),
+        'client_email' => env('FIREBASE_CLIENT_EMAIL'),
+        'client_id' => env('FIREBASE_CLIENT_ID'),
+        'auth_uri' => 'https://accounts.google.com/o/oauth2/auth',
+        'token_uri' => 'https://oauth2.googleapis.com/token',
+        'auth_provider_x509_cert_url' => 'https://www.googleapis.com/oauth2/v1/certs',
+        'client_x509_cert_url' => env('FIREBASE_CLIENT_CERT_URL'),
+    ],
+    
+    // HTTP client configuration
+    'http' => [
+        'timeout' => 30,
+        'retry_delay' => 5000,
+        'retries' => 3,
+        'verify' => true,
+        'http_errors' => true,
+    ],
+    
+    // Logging configuration
+    'log_enabled' => true,
+    'log_channel' => env('LOG_CHANNEL', 'stack'),
+    
+    // Default message data
+    'message' => [
+        'priority' => 'high',
+        'content_available' => true,
+        'mutable_content' => true,
+        'notification' => [
+            'sound' => 'default',
+            'badge' => 1,
+        ],
+    ],
+    
     // HTTP Settings
     'http_protocol' => env('FIREBASE_HTTP_PROTOCOL', 'https'),
     'http_timeout' => env('FIREBASE_HTTP_TIMEOUT', 30),

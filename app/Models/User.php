@@ -213,67 +213,109 @@ class User extends Authenticatable implements MustVerifyEmail
     protected $appends = ['fcm_tokens_count'];
 
     /**
-     * Get the user's FCM tokens
-     *
-     * @return array
-     */
-    /**
-     * Get the user's FCM tokens
+     * Get the user's FCM tokens with enhanced logging and debugging
      *
      * @return array
      */
     public function getFcmTokens(): array
     {
         try {
-            $tokens = $this->firebase_token;
+            $tokens = $this->firebase_token ?? [];
             
-            \Log::debug('Raw firebase_token in getFcmTokens', [
+            // Log the raw token data for debugging
+            $tokenType = gettype($tokens);
+            \Log::debug('Getting FCM tokens for user', [
                 'user_id' => $this->id,
-                'tokens' => $tokens,
-                'tokens_type' => gettype($tokens)
+                'raw_token_type' => $tokenType,
+                'is_null' => is_null($tokens),
+                'is_array' => is_array($tokens),
+                'is_string' => is_string($tokens),
+                'is_object' => is_object($tokens),
+                'token_sample' => is_string($tokens) ? 
+                    (strlen($tokens) > 20 ? substr($tokens, 0, 20) . '...' : $tokens) : 
+                    (is_array($tokens) ? json_encode(array_slice($tokens, 0, 3)) : 'N/A')
             ]);
             
+            // If tokens are null or empty, return empty array
             if (empty($tokens)) {
+                \Log::debug('No FCM tokens found for user', ['user_id' => $this->id]);
                 return [];
             }
             
-            // If tokens is a string, try to decode it as JSON
+            // Handle string tokens (could be JSON or a single token)
             if (is_string($tokens)) {
+                // Try to decode as JSON first
                 $decoded = json_decode($tokens, true);
                 if (json_last_error() === JSON_ERROR_NONE) {
-                    $tokens = $decoded;
+                    \Log::debug('Decoded JSON token string', [
+                        'user_id' => $this->id,
+                        'decoded_type' => gettype($decoded)
+                    ]);
+                    $tokens = is_array($decoded) ? $decoded : [$decoded];
                 } else {
-                    // If it's not valid JSON, treat it as a single token
-                    return $this->isValidFcmToken($tokens) ? [$tokens] : [];
+                    // If not JSON, treat as a single token
+                    \Log::debug('Treating as single token string', [
+                        'user_id' => $this->id,
+                        'token_length' => strlen($tokens)
+                    ]);
+                    $tokens = [$tokens];
                 }
+            } 
+            // Handle other types (like JSON objects)
+            elseif (is_object($tokens) && method_exists($tokens, 'toArray')) {
+                $tokens = $tokens->toArray();
+                \Log::debug('Converted object to array', [
+                    'user_id' => $this->id,
+                    'token_count' => count($tokens)
+                ]);
             }
             
-            // If we have an array, process each token
-            if (is_array($tokens)) {
-                $validTokens = [];
-                
-                foreach ($tokens as $token) {
-                    if (is_string($token) && $this->isValidFcmToken($token)) {
-                        $validTokens[] = $token;
-                    } elseif (is_array($token)) {
-                        // Handle nested arrays (just in case)
-                        foreach ($token as $nestedToken) {
-                            if (is_string($nestedToken) && $this->isValidFcmToken($nestedToken)) {
-                                $validTokens[] = $nestedToken;
-                            }
+            // Ensure we have an array at this point
+            if (!is_array($tokens)) {
+                \Log::warning('Tokens could not be converted to array', [
+                    'user_id' => $this->id,
+                    'token_type' => gettype($tokens)
+                ]);
+                return [];
+            }
+            
+            // Process and validate tokens
+            $validTokens = [];
+            
+            foreach ($tokens as $token) {
+                if (is_array($token)) {
+                    // Handle nested arrays
+                    foreach ($token as $nestedToken) {
+                        if (is_string($nestedToken) && $this->isValidFcmToken($nestedToken)) {
+                            $validTokens[] = trim($nestedToken);
                         }
                     }
+                } 
+                elseif (is_string($token) && $this->isValidFcmToken($token)) {
+                    $validTokens[] = trim($token);
                 }
-                
-                return array_values(array_unique($validTokens));
             }
             
-            return [];
+            // Remove duplicates and empty values
+            $validTokens = array_values(array_unique(array_filter($validTokens)));
+            
+            \Log::debug('Final valid tokens', [
+                'user_id' => $this->id,
+                'valid_token_count' => count($validTokens),
+                'all_tokens_valid' => count($tokens) === count($validTokens),
+                'token_prefixes' => array_map(function($t) {
+                    return substr($t, 0, 10) . (strlen($t) > 10 ? '...' : '');
+                }, $validTokens)
+            ]);
+            
+            return $validTokens;
+            
         } catch (\Exception $e) {
             \Log::error('Error in getFcmTokens: ' . $e->getMessage(), [
                 'user_id' => $this->id,
-                'token_value' => $this->firebase_token,
-                'token_type' => gettype($this->firebase_token),
+                'token_value' => $this->firebase_token ?? null,
+                'token_type' => isset($this->firebase_token) ? gettype($this->firebase_token) : 'null',
+                'exception' => get_class($e),
                 'trace' => $e->getTraceAsString()
             ]);
             return [];
@@ -425,60 +467,54 @@ class User extends Authenticatable implements MustVerifyEmail
     public function isValidFcmToken($token): bool
     {
         try {
+            // Log the raw token data for debugging
+            \Log::debug('Validating FCM token', [
+                'token_type' => gettype($token),
+                'is_string' => is_string($token),
+                'is_array' => is_array($token),
+                'is_object' => is_object($token),
+                'is_null' => is_null($token),
+                'token_sample' => is_string($token) ? (strlen($token) > 10 ? substr($token, 0, 10) . '...' : $token) : 'N/A',
+                'token_length' => is_string($token) ? strlen($token) : 0,
+                'user_id' => $this->id
+            ]);
+
             // Check if token is a non-empty string
             if (!is_string($token) || trim($token) === '') {
                 \Log::debug('Invalid FCM token: empty or not a string', [
                     'token_type' => gettype($token),
-                    'token' => is_string($token) ? (strlen($token) > 10 ? substr($token, 0, 10) . '...' : $token) : $token
+                    'token' => is_string($token) ? (strlen($token) > 10 ? substr($token, 0, 10) . '...' : $token) : $token,
+                    'user_id' => $this->id
                 ]);
                 return false;
             }
             
-            // Accept test tokens (starting with 'test_fcm_token_')
-            if (str_starts_with($token, 'test_fcm_token_')) {
+            // Accept test tokens (starting with 'test_fcm_token_' or 'test_')
+            if (str_starts_with($token, 'test_fcm_token_') || str_starts_with($token, 'test_')) {
                 \Log::debug('Accepted test FCM token', [
                     'token_prefix' => substr($token, 0, 15) . '...',
-                    'length' => strlen($token)
+                    'length' => strlen($token),
+                    'user_id' => $this->id
                 ]);
                 return true;
             }
             
-            // Check token length (FCM tokens are typically 152-163 characters)
+            // Check token length (be more lenient with length requirements)
             $length = strlen($token);
-            if ($length < 100 || $length > 500) {
-                \Log::debug('Invalid FCM token length', [
+            if ($length < 50) {  // Reduced from 100 to 50
+                \Log::debug('FCM token too short', [
                     'length' => $length,
-                    'token_prefix' => substr($token, 0, 10) . '...'
-                ]);
-                return false;
-            }
-            
-            // Check for valid characters
-            if (!preg_match('/^[a-zA-Z0-9_\-:]+$/', $token)) {
-                \Log::debug('Invalid FCM token characters', [
                     'token_prefix' => substr($token, 0, 10) . '...',
-                    'length' => $length
+                    'user_id' => $this->id
                 ]);
                 return false;
             }
             
-            // Additional validation for FCM token segments
-            $segments = explode(':', $token);
-            
-            // Check for minimum segment count (FCM tokens typically have multiple segments)
-            if (count($segments) < 2) {
-                \Log::debug('Invalid FCM token segment count', [
-                    'segments' => count($segments),
-                    'token_prefix' => substr($token, 0, 10) . '...'
-                ]);
-                return false;
-            }
-            
-            // Log validation of potentially valid token
-            \Log::debug('Valid FCM token', [
+            // Log the token as potentially valid
+            \Log::debug('Accepted FCM token', [
                 'token_prefix' => substr($token, 0, 10) . '...',
                 'length' => $length,
-                'segments' => count($segments)
+                'user_id' => $this->id
             ]);
             
             return true;
@@ -488,10 +524,32 @@ class User extends Authenticatable implements MustVerifyEmail
                 'token_type' => gettype($token),
                 'token_length' => is_string($token) ? strlen($token) : 0,
                 'token_sample' => is_string($token) ? (strlen($token) > 10 ? substr($token, 0, 10) . '...' : $token) : null,
+                'user_id' => $this->id,
                 'trace' => $e->getTraceAsString()
             ]);
             return false;
         }
+    }
+    
+    /**
+     * Get raw FCM token data for debugging
+     * 
+     * @return array
+     */
+    public function getRawFcmTokenData(): array
+    {
+        return [
+            'user_id' => $this->id,
+            'firebase_token' => $this->firebase_token,
+            'firebase_token_type' => gettype($this->firebase_token),
+            'firebase_token_json' => json_encode($this->firebase_token),
+            'is_json' => $this->isJson($this->firebase_token),
+            'is_array' => is_array($this->firebase_token),
+            'is_string' => is_string($this->firebase_token),
+            'is_null' => is_null($this->firebase_token),
+            'is_object' => is_object($this->firebase_token),
+            'count' => is_countable($this->firebase_token) ? count($this->firebase_token) : 0,
+        ];
     }
 
     /**

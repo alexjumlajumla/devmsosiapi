@@ -2032,6 +2032,9 @@ Route::prefix('v1')->group(function () {
 | Voice Dialogue API Routes
 |--------------------------------------------------------------------------
 */
+// Debug routes
+require __DIR__ . '/api-debug.php';
+
 Route::prefix('voice-dialogue')->group(function () {
     Route::post('/process', 'App\Http\Controllers\API\VoiceDialogueController@processVoiceCommand');
     Route::get('/payment-methods', 'App\Http\Controllers\API\VoiceDialogueController@getPaymentMethods');

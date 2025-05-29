@@ -187,6 +187,7 @@ return [
         App\Providers\RepositoryProvider::class,
         App\Providers\LogServiceProvider::class,
         App\Providers\FirebaseServiceProvider::class,
+        App\Providers\FcmServiceProvider::class,
         App\Providers\NotificationServiceProvider::class,
         App\Providers\GoogleServiceProvider::class,
     ],

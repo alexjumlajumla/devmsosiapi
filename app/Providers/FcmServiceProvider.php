@@ -41,6 +41,10 @@ class FcmServiceProvider extends ServiceProvider
             $this->commands([
                 \App\Console\Commands\CleanupInvalidFcmTokens::class,
                 \App\Console\Commands\TestFcmNotification::class,
+                \App\Console\Commands\InspectFcmToken::class,
+                \App\Console\Commands\DebugFcmTokens::class,
+                \App\Console\Commands\ListFcmTokens::class,
+                \App\Console\Commands\UpdateTestFcmTokens::class,
             ]);
         }
     }
