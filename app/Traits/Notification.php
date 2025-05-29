@@ -321,6 +321,23 @@ trait Notification
         ]);
         
         try {
+            // Implementation of storeNotificationInDatabase
+            // ...
+            
+        } catch (\Exception $e) {
+            Log::error('Error storing notification in database: ' . $e->getMessage(), [
+                'exception' => $e,
+                'trace' => $e->getTraceAsString()
+            ]);
+        }
+    }
+    
+    /**
+     * Send notification via legacy FCM API
+     * 
+     * @param array $receivers
+     * @param string|null $title
+     * @param string $message
      * @param array $data
      * @param array $userIds
      * @param string|null $firebaseTitle
