@@ -158,14 +158,43 @@ class FcmChannel
         }
         
         if (is_array($fcmMessage)) {
-            $message = CloudMessage::fromArray($fcmMessage);
+            // Create a new CloudMessage instance
+            $message = CloudMessage::new();
             
-            // Set default notification if not set
-            if (!isset($fcmMessage['notification'])) {
-                $message = $message->withNotification(FcmNotification::create(
+            // Set notification if provided
+            if (isset($fcmMessage['notification'])) {
+                $message = $message->withNotification(
+                    $fcmMessage['notification']['title'] ?? null,
+                    $fcmMessage['notification']['body'] ?? null
+                );
+            } elseif (isset($fcmMessage['title']) || isset($fcmMessage['body'])) {
+                // For backward compatibility with older format
+                $message = $message->withNotification(
                     $fcmMessage['title'] ?? $this->config['default_title'] ?? 'New Notification',
                     $fcmMessage['body'] ?? $this->config['default_body'] ?? 'You have a new notification'
-                ));
+                );
+            }
+            
+            // Set data if provided
+            if (isset($fcmMessage['data']) && is_array($fcmMessage['data'])) {
+                $message = $message->withData($fcmMessage['data']);
+            }
+            
+            // Set other message properties
+            if (isset($fcmMessage['android'])) {
+                $message = $message->withAndroidConfig($fcmMessage['android']);
+            }
+            
+            if (isset($fcmMessage['apns'])) {
+                $message = $message->withApnsConfig($fcmMessage['apns']);
+            }
+            
+            if (isset($fcmMessage['webpush'])) {
+                $message = $message->withWebPushConfig($fcmMessage['webpush']);
+            }
+            
+            if (isset($fcmMessage['priority'])) {
+                $message = $message->withPriority($fcmMessage['priority']);
             }
             
             return $this->applyDefaultConfig($message);
@@ -182,6 +211,13 @@ class FcmChannel
      */
     protected function applyDefaultConfig(CloudMessage $message): CloudMessage
     {
+        // Get notification data from the message
+        $notification = null;
+        if (method_exists($message, 'jsonSerialize')) {
+            $messageData = $message->jsonSerialize();
+            $notification = $messageData['notification'] ?? null;
+        }
+
         // Apply Android config
         $androidConfig = [
             'priority' => $this->config['android_priority'] ?? 'high',
@@ -195,7 +231,7 @@ class FcmChannel
             ],
         ];
         
-        // Apply APNS (iOS) config
+        // Prepare APNS (iOS) config
         $apnsConfig = [
             'headers' => [
                 'apns-priority' => $this->config['apns_priority'] ?? '10',
@@ -204,8 +240,8 @@ class FcmChannel
             'payload' => [
                 'aps' => [
                     'alert' => [
-                        'title' => $message->notification()?->title() ?? '',
-                        'body' => $message->notification()?->body() ?? '',
+                        'title' => $notification['title'] ?? '',
+                        'body' => $notification['body'] ?? '',
                     ],
                     'sound' => $this->config['default_sound'] ?? 'default',
                     'badge' => 1,
@@ -214,33 +250,37 @@ class FcmChannel
             ],
         ];
         
-        return $message
+        // Apply the configurations to the message
+        $message = $message
             ->withAndroidConfig($androidConfig)
             ->withApnsConfig($apnsConfig);
         
-        // Set APNS config if provided
-        if (isset($fcmMessage['apns'])) {
-            $message = $message->withApnsConfig($fcmMessage['apns']);
-        }
-        
-        // Set web push config if provided
-        if (isset($fcmMessage['webpush'])) {
-            $message = $message->withWebPushConfig($fcmMessage['webpush']);
-        }
-        
-        // Set priority if provided
-        if (isset($fcmMessage['priority'])) {
-            $message = $message->withPriority($fcmMessage['priority']);
-        }
-        
-        // Set content available flag if provided
-        if (isset($fcmMessage['content_available'])) {
-            $message = $message->withContentAvailable($fcmMessage['content_available']);
-        }
-        
-        // Set mutable content flag if provided (for iOS)
-        if (isset($fcmMessage['mutable_content'])) {
-            $message = $message->withMutableContent($fcmMessage['mutable_content']);
+        // Set additional configurations if provided in the message data
+        if (isset($messageData)) {
+            // Set APNS config if provided
+            if (isset($messageData['apns'])) {
+                $message = $message->withApnsConfig($messageData['apns']);
+            }
+            
+            // Set web push config if provided
+            if (isset($messageData['webpush'])) {
+                $message = $message->withWebPushConfig($messageData['webpush']);
+            }
+            
+            // Set priority if provided
+            if (isset($messageData['priority'])) {
+                $message = $message->withPriority($messageData['priority']);
+            }
+            
+            // Set content available flag if provided
+            if (isset($messageData['content_available'])) {
+                $message = $message->withContentAvailable($messageData['content_available']);
+            }
+            
+            // Set mutable content flag if provided (for iOS)
+            if (isset($messageData['mutable_content'])) {
+                $message = $message->withMutableContent($messageData['mutable_content']);
+            }
         }
         
         return $message;
