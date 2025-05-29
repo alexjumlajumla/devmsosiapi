@@ -201,7 +201,16 @@ class FcmChannel
             }
             
             if (isset($fcmMessage['priority'])) {
-                $message = $message->withPriority($fcmMessage['priority']);
+                // For Android, set priority in the android config
+                $androidConfig = $fcmMessage['android'] ?? [];
+                $androidConfig['priority'] = $fcmMessage['priority'];
+                $message = $message->withAndroidConfig($androidConfig);
+                
+                // For APNS (iOS), set priority in the apns config
+                $apnsConfig = $fcmMessage['apns'] ?? [];
+                $apnsConfig['headers'] = $apnsConfig['headers'] ?? [];
+                $apnsConfig['headers']['apns-priority'] = $fcmMessage['priority'] == 'high' ? '10' : '5';
+                $message = $message->withApnsConfig($apnsConfig);
             }
             
             return $this->applyDefaultConfig($message);
@@ -231,6 +240,24 @@ class FcmChannel
             } elseif (isset($messageData['notification']) && is_string($messageData['notification'])) {
                 $notification = ['body' => $messageData['notification']];
             }
+            
+            // Ensure priority is set for both Android and iOS
+            $priority = $messageData['priority'] ?? 'high';
+            
+            // Get existing configs
+            $androidConfig = $messageData['android'] ?? [];
+            $apnsConfig = $messageData['apns'] ?? [];
+            
+            // Set Android priority
+            $androidConfig['priority'] = $androidConfig['priority'] ?? $priority;
+            
+            // Set APNS priority (iOS)
+            $apnsConfig['headers'] = $apnsConfig['headers'] ?? [];
+            $apnsConfig['headers']['apns-priority'] = $apnsConfig['headers']['apns-priority'] ?? ($priority === 'high' ? '10' : '5');
+            
+            // Apply the configs
+            $message = $message->withAndroidConfig($androidConfig);
+            $message = $message->withApnsConfig($apnsConfig);
         }
 
         // Apply Android config
