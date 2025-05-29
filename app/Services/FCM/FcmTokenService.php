@@ -484,13 +484,13 @@ class FcmTokenService
             return false;
         }
 
-        // Accept test tokens (starting with 'test_fcm_token_' or 'test_')
+        // Reject test tokens (starting with 'test_fcm_token_' or 'test_')
         if (str_starts_with($token, 'test_fcm_token_') || str_starts_with($token, 'test_')) {
-            \Log::debug('Accepted test FCM token', [
-                'token_prefix' => substr($token, 0, 15) . '...',
-                'length' => strlen($token)
+            \Log::warning('Rejected test FCM token', [
+                'token' => $token,
+                'reason' => 'Test tokens are not allowed for production notifications'
             ]);
-            return true;
+            return false;
         }
 
         // Basic validation for FCM token format
