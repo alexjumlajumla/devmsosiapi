@@ -467,18 +467,29 @@ trait Notification
                             }
                         }
                     }
-                } else {
-                    $failureCount += count($chunk);
-                    Log::error('Failed to send legacy FCM notification', [
-                        'status' => $response->status(),
-                        'response' => $responseData,
-                        'payload' => $logPayload,
-                        'message' => $message,
-                        'data' => $data,
-                        'user_ids' => $userIds,
-                        'firebase_title' => $firebaseTitle
-                    ]);
                 }
+            } catch (\Exception $e) {
+                $failureCount += count($chunk);
+                Log::error('Exception while sending legacy FCM notification', [
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString(),
+                    'payload' => $logPayload,
+                    'message' => $message,
+                    'data' => $data,
+                    'user_ids' => $userIds,
+                    'firebase_title' => $firebaseTitle
+                ]);
+            }
+        } else {
+            $failureCount += count($chunk);
+            Log::error('Failed to send legacy FCM notification - No response', [
+                'payload' => $logPayload,
+                'message' => $message,
+                'data' => $data,
+                'user_ids' => $userIds,
+                'firebase_title' => $firebaseTitle
+            ]);
+        }
             }
         }
         
