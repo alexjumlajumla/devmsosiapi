@@ -116,82 +116,30 @@ class FirebaseServiceProvider extends ServiceProvider
      */
     protected function getServiceAccountConfig(): array
     {
-        // Try to load from environment variables first
+        // Hardcoded configuration based on the provided credentials
         $config = [
-            'project_id' => env('FIREBASE_PROJECT_ID', config('fcm.project_id', 'msosijumla')),
-            'private_key_id' => env('FIREBASE_PRIVATE_KEY_ID'),
-            'private_key' => env('FIREBASE_PRIVATE_KEY'),
-            'client_email' => env('FIREBASE_CLIENT_EMAIL'),
-            'client_id' => env('FIREBASE_CLIENT_ID'),
-            'client_cert_url' => env('FIREBASE_CLIENT_CERT_URL'),
+            'type' => 'service_account',
+            'project_id' => 'msosijumla',
+            'private_key_id' => 'a14562c86b5b3672c0b99a5f4b6e911175f42ca4',
+            'private_key' => "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDk1uM9M87Xsjbb\n6F8lGDp2LJ8nFieQgPiIHdmXv4dP8q7rU41l3AgXBUahKTiS7tDVJwuSrk+mmvmd\ncT0Wh0wkklgaxmCBRJh39ZwqTA5GBAid9lxwFlyMMY7xBjIkBfP4wg/YYVSn/1yY\n5sKIMV5LfWcDZy4HoeQSHqmqcQd+x/KPLS9OFT6feUBLdIf501J9fzOR71jNW2N+\nv9Myc/zCLdmqaik7b4Cs3NXNNSHFUY6fB06JQdzJnm/xl9oS+vSz//fol1eV8R0i\nMq93GNq/bHwDqL9izyUfoiISCTZ4r1Oii8WmKhN02geNBO/FZhxJy2uNGtFji3KU\nPxSFyP5bAgMBAAECggEAMYWZVojMJdyAx7UxRd9I44MDjBtcw4ZNgnNnP9Iob7I2\njWGe82Ca9ZRkNQMtJYr98WrKM9t6DDV0eFBlpmbwIOf0nhK5FrBoCGnD+llMK3W7\nAagrV+xW6dXdt6YeGrKZGgexEyP5BIQcH1Cs33lDjTWdodxl1yv/JbayA9sDArnM\nln1xTEadBe8xDYFjarRH0nfOTWPiEgt/WIAq0SJzrrO97+7vVjr7KRyDlZoaYbup\nxzaWLdeCCrzViI/DQOGnlC8cnH0dkOna6F26mG+NIKx+m8zvg0OPLxPH16YGxQMd\nIh/uRFFyaAtJZYlz7WUbPFtFJHICYG3ZHkziH1R25QKBgQD8toyd32IZAM/HtYMk\ndhM1zDO2wKXDxI4JgKNkxfQE14zBAO+mp17O9rTE/hc5b0NxkwEJSfvxPzaGfVsU\n2zMC7/o8ikGf3xiwqQsu2p/0L678SF/2R43Lu9Cs+GhA3c/tBUSf9p/9vaqVpPZs\nOHKtOmUSOFOryoVGpoUYqyoi3QKBgQDn0NjRJ8yjRJGJUuw8mvWva33aNPMO5y6Z\noR/GImXoLHzSTq/xhbNLVkKyDSJ5gCOMUiu8b3JBBeHK3pgXPIML82RrRukLS9Eg\nJKF6j7U99SCQRPspw0kH05+DbKUcyq5ozZ2jQghe2NPr4FV2L9+TdaDSwu2Gd2ay\nASFzPp5GlwKBgQDdeLJ1bR7QoMh30lhzLNObEzHDGMRtdCWyqD0KBP3c/HbLcqGU\nYRwSr10vQythV2Q49cczt9YH0AleBiA7f/sNuPiJ8/SdQmyl7g/x6QHDg8KMMHWB\nJaZcBWZVIIJlTr95jmNc+UuvmXgVG3Qm1bWSoRmQxTJ23M6+YxND0kXkNQKBgFkl\nvKu6hXzoGpvX0td/tCnQyaZHpI0/pHEaQHDeu5fsu9fYwNq90vSO6Lk2SeK1v3Xw\nB7fAmAyfaXSt44lUEQVghWan72kTsAmPbLYIW+fGw84XaQtneUdUP8y31EtdOnM9\nV3j4JOXstprIO7VmtbEslDtZESUb99dOjgGWvCFjAoGAZKgN9EWzjz0vVQ56CMz7\nNNfLCdGeW/qq1bOnvMtrA98MaUjw7EFz6cs690Go6bmubiPgjTmIcSbKnm8arnDc\ncfJQZnMTVgjAvB2Zwv0RUH3vdPKvXCJKiexpHjFUOuIktZ25M1X6OPOZVmRgrOYB\nUJDNgKIV1NVuN7H0AmSbRkY=\n-----END PRIVATE KEY-----",
+            'client_email' => 'firebase-adminsdk-zubkp@msosijumla.iam.gserviceaccount.com',
+            'client_id' => '104096160020774877435',
+            'auth_uri' => 'https://accounts.google.com/o/oauth2/auth',
+            'token_uri' => 'https://oauth2.googleapis.com/token',
+            'auth_provider_x509_cert_url' => 'https://www.googleapis.com/oauth2/v1/certs',
+            'client_x509_cert_url' => 'https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-zubkp%40msosijumla.iam.gserviceaccount.com',
+            'universe_domain' => 'googleapis.com',
         ];
-        
-        // Log the configuration for debugging
+
+        // Log the configuration (without sensitive data)
         \Log::debug('Firebase configuration loaded', [
-            'has_project_id' => !empty($config['project_id']),
-            'has_private_key_id' => !empty($config['private_key_id']),
+            'project_id' => $config['project_id'],
+            'client_email' => $config['client_email'],
             'has_private_key' => !empty($config['private_key']),
-            'has_client_email' => !empty($config['client_email']),
-            'has_client_id' => !empty($config['client_id']),
-            'has_client_cert_url' => !empty($config['client_cert_url']),
+            'has_private_key_id' => !empty($config['private_key_id']),
         ]);
-        
-        $missing = [];
-        foreach ($config as $key => $value) {
-            if (empty($value)) {
-                $missing[] = $key;
-            }
-        }
-        
-        // If all required configuration values are set, use them
-        if (empty($missing)) {
-            return [
-                'type' => 'service_account',
-                'project_id' => $config['project_id'],
-                'private_key_id' => $config['private_key_id'],
-                'private_key' => str_replace('\\n', "\n", $config['private_key']),
-                'client_email' => $config['client_email'],
-                'client_id' => $config['client_id'],
-                'auth_uri' => 'https://accounts.google.com/o/oauth2/auth',
-                'token_uri' => 'https://oauth2.googleapis.com/token',
-                'auth_provider_x509_cert_url' => 'https://www.googleapis.com/oauth2/v1/certs',
-                'client_x509_cert_url' => $config['client_cert_url'],
-                'universe_domain' => 'googleapis.com',
-            ];
-        }
-        
-        // If environment variables are missing, try to load from service account file
-        $serviceAccountPath = storage_path('app/firebase-service-account.json');
-        
-        if (file_exists($serviceAccountPath)) {
-            $serviceAccount = json_decode(file_get_contents($serviceAccountPath), true);
-            
-            if (json_last_error() === JSON_ERROR_NONE) {
-                return array_merge([
-                    'type' => 'service_account',
-                    'auth_uri' => 'https://accounts.google.com/o/oauth2/auth',
-                    'token_uri' => 'https://oauth2.googleapis.com/token',
-                    'auth_provider_x509_cert_url' => 'https://www.googleapis.com/oauth2/v1/certs',
-                    'universe_domain' => 'googleapis.com',
-                ], $serviceAccount);
-            }
-        }
-        
-        // If we get here, no valid configuration was found
-        $errorMessage = sprintf(
-            'Missing required Firebase configuration. Missing: %s. Please set FIREBASE_PROJECT_ID and other required environment variables or place a service account JSON file at %s',
-            implode(', ', $missing),
-            $serviceAccountPath
-        );
-        
-        \Log::error($errorMessage, [
-            'missing_keys' => $missing,
-            'config' => array_keys(array_filter($config, function($value) {
-                return !empty($value);
-            }))
-        ]);
-        
-        throw new \RuntimeException($errorMessage);
+
+        return $config;
     }
 
     /**
