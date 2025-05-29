@@ -162,12 +162,38 @@ trait Notification
      */
     protected function validateAndFilterTokens(array $tokens): array
     {
-        return array_values(array_filter(
-            array_unique($tokens),
-            fn($token) => !empty($token) && 
-                         is_string($token) && 
-                         $this->fcmService()->isValidToken($token)
-        ));
+        $validatedTokens = [];
+        
+        foreach ($tokens as $token) {
+            if (empty($token) || !is_string($token)) {
+                Log::debug('Skipping invalid token', [
+                    'token' => $token,
+                    'reason' => 'Empty or not a string'
+                ]);
+                continue;
+            }
+            
+            // Check if it's a test token
+            if (str_starts_with($token, 'test_fcm_token_')) {
+                Log::debug('Skipping test token', [
+                    'token_prefix' => substr($token, 0, 15) . '...',
+                    'length' => strlen($token),
+                    'user_id' => str_replace('test_fcm_token_', '', $token)
+                ]);
+                continue;
+            }
+            
+            if ($this->fcmService()->isValidToken($token)) {
+                $validatedTokens[] = $token;
+            } else {
+                Log::debug('Skipping invalid FCM token', [
+                    'token_prefix' => substr($token, 0, 10) . '...',
+                    'length' => strlen($token)
+                ]);
+            }
+        }
+        
+        return array_values(array_unique($validatedTokens));
     }
     
     /**
@@ -341,13 +367,16 @@ trait Notification
             $notifications = [];
             $now = now();
             
+            // Ensure data is properly encoded as JSON
+            $jsonData = is_array($data) ? json_encode($data) : (is_string($data) ? $data : '');
+            
             foreach ($userIds as $userId) {
                 $notifications[] = [
                     'user_id' => $userId,
                     'type' => $notificationType,
-                    'title' => $title,
+                    'title' => $title ?? '',
                     'body' => $message,
-                    'data' => $data,
+                    'data' => $jsonData,
                     'created_at' => $now,
                     'updated_at' => $now,
                 ];
