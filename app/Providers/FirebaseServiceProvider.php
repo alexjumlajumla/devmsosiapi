@@ -11,6 +11,7 @@ use Kreait\Firebase\Contract\Storage;
 use Kreait\Firebase\Factory;
 use Kreait\Firebase\ServiceAccount;
 use Kreait\Firebase\Messaging\CloudMessage;
+use Illuminate\Support\Facades\Log;
 
 class FirebaseServiceProvider extends ServiceProvider
 {
