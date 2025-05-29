@@ -116,6 +116,7 @@ class FirebaseServiceProvider extends ServiceProvider
      */
     protected function getServiceAccountConfig(): array
     {
+        // Try to load from environment variables first
         $required = [
             'project_id' => config('fcm.project_id'),
             'private_key_id' => env('FIREBASE_PRIVATE_KEY_ID'),
@@ -132,26 +133,46 @@ class FirebaseServiceProvider extends ServiceProvider
             }
         }
         
-        if (!empty($missing)) {
-            throw new \RuntimeException(sprintf(
-                'Missing required Firebase configuration: %s',
-                implode(', ', $missing)
-            ));
+        // If all required environment variables are set, use them
+        if (empty($missing)) {
+            return [
+                'type' => 'service_account',
+                'project_id' => $required['project_id'],
+                'private_key_id' => $required['private_key_id'],
+                'private_key' => str_replace('\\n', "\n", $required['private_key']),
+                'client_email' => $required['client_email'],
+                'client_id' => $required['client_id'],
+                'auth_uri' => 'https://accounts.google.com/o/oauth2/auth',
+                'token_uri' => 'https://oauth2.googleapis.com/token',
+                'auth_provider_x509_cert_url' => 'https://www.googleapis.com/oauth2/v1/certs',
+                'client_x509_cert_url' => $required['client_cert_url'],
+                'universe_domain' => 'googleapis.com',
+            ];
         }
         
-        return [
-            'type' => 'service_account',
-            'project_id' => $required['project_id'],
-            'private_key_id' => $required['private_key_id'],
-            'private_key' => str_replace('\\n', "\n", $required['private_key']),
-            'client_email' => $required['client_email'],
-            'client_id' => $required['client_id'],
-            'auth_uri' => 'https://accounts.google.com/o/oauth2/auth',
-            'token_uri' => 'https://oauth2.googleapis.com/token',
-            'auth_provider_x509_cert_url' => 'https://www.googleapis.com/oauth2/v1/certs',
-            'client_x509_cert_url' => $required['client_cert_url'],
-            'universe_domain' => 'googleapis.com',
-        ];
+        // If environment variables are missing, try to load from service account file
+        $serviceAccountPath = storage_path('app/firebase-service-account.json');
+        
+        if (file_exists($serviceAccountPath)) {
+            $serviceAccount = json_decode(file_get_contents($serviceAccountPath), true);
+            
+            if (json_last_error() === JSON_ERROR_NONE) {
+                return array_merge([
+                    'type' => 'service_account',
+                    'auth_uri' => 'https://accounts.google.com/o/oauth2/auth',
+                    'token_uri' => 'https://oauth2.googleapis.com/token',
+                    'auth_provider_x509_cert_url' => 'https://www.googleapis.com/oauth2/v1/certs',
+                    'universe_domain' => 'googleapis.com',
+                ], $serviceAccount);
+            }
+        }
+        
+        // If we get here, no valid configuration was found
+        throw new \RuntimeException(sprintf(
+            'Missing required Firebase configuration. Either set all required environment variables or place a service account JSON file at %s. Missing: %s',
+            $serviceAccountPath,
+            implode(', ', $missing)
+        ));
     }
 
     /**
