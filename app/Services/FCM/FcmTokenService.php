@@ -222,38 +222,81 @@ class FcmTokenService
      */
     protected function getUserTokens(User $user): array
     {
-        // Use the User model's getFcmTokens method if available
-        if (method_exists($user, 'getFcmTokens')) {
-            return $user->getFcmTokens();
+        try {
+            // Log the raw firebase_token value for debugging
+            \Log::debug('Raw firebase_token value', [
+                'user_id' => $user->id,
+                'firebase_token' => $user->firebase_token,
+                'firebase_token_type' => gettype($user->firebase_token)
+            ]);
+            
+            // Use the User model's getFcmTokens method if available
+            if (method_exists($user, 'getFcmTokens')) {
+                $tokens = $user->getFcmTokens();
+                \Log::debug('Tokens from getFcmTokens()', [
+                    'user_id' => $user->id,
+                    'tokens' => $tokens,
+                    'tokens_count' => count($tokens)
+                ]);
+                return $tokens;
+            }
+            
+            // Fallback to direct property access for backward compatibility
+            if (isset($user->firebase_token)) {
+                $tokens = $user->firebase_token;
+                
+                if (empty($tokens)) {
+                    \Log::debug('Empty firebase_token', ['user_id' => $user->id]);
+                    return [];
+                }
+                
+                // Handle JSON string
+                if (is_string($tokens) && $this->isJson($tokens)) {
+                    $decoded = json_decode($tokens, true);
+                    \Log::debug('Decoded JSON tokens', [
+                        'user_id' => $user->id,
+                        'decoded' => $decoded
+                    ]);
+                    $tokens = $decoded;
+                }
+                
+                // Handle string token
+                if (is_string($tokens) && $this->isValidFcmToken($tokens)) {
+                    \Log::debug('Valid string token found', ['user_id' => $user->id]);
+                    return [$tokens];
+                }
+                
+                // Handle array of tokens
+                if (is_array($tokens)) {
+                    $validTokens = array_values(array_filter($tokens, function($token) {
+                        return is_string($token) && $this->isValidFcmToken($token);
+                    }));
+                    
+                    \Log::debug('Processed array tokens', [
+                        'user_id' => $user->id,
+                        'valid_tokens' => $validTokens,
+                        'valid_count' => count($validTokens)
+                    ]);
+                    
+                    return $validTokens;
+                }
+                
+                \Log::warning('Unhandled token format', [
+                    'user_id' => $user->id,
+                    'token_type' => gettype($tokens),
+                    'token_value' => $tokens
+                ]);
+            }
+            
+            return [];
+        } catch (\Exception $e) {
+            \Log::error('Error in getUserTokens', [
+                'user_id' => $user->id ?? null,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            return [];
         }
-        
-        // Fallback to direct property access for backward compatibility
-        if (isset($user->firebase_token)) {
-            $tokens = $user->firebase_token;
-            
-            if (empty($tokens)) {
-                return [];
-            }
-            
-            // Handle JSON string
-            if (is_string($tokens) && $this->isJson($tokens)) {
-                $tokens = json_decode($tokens, true);
-            }
-            
-            // Handle string token
-            if (is_string($tokens) && $this->isValidFcmToken($tokens)) {
-                return [$tokens];
-            }
-            
-            // Handle array of tokens
-            if (is_array($tokens)) {
-                return array_values(array_filter($tokens, function($token) {
-                    return is_string($token) && $this->isValidFcmToken($token);
-                }));
-            }
-        }
-        
-        return [];
     }
     
     /**
@@ -434,12 +477,32 @@ class FcmTokenService
     public function isValidFcmToken(string $token): bool
     {
         if (!is_string($token) || empty($token)) {
+            \Log::debug('Invalid FCM token: not a string or empty', [
+                'token' => $token,
+                'type' => gettype($token)
+            ]);
             return false;
         }
 
         // Basic validation for FCM token format
         // FCM tokens are typically 152-163 characters long and contain alphanumeric characters and some special characters
-        return (bool) preg_match('/^[a-zA-Z0-9_\-:]+$/', $token);
+        $isValid = (bool) preg_match('/^[a-zA-Z0-9_\-:]+$/', $token);
+        
+        if (!$isValid) {
+            \Log::debug('Invalid FCM token format', [
+                'token' => $token,
+                'length' => strlen($token),
+                'first_10_chars' => substr($token, 0, 10) . '...',
+                'regex_match' => preg_match('/^[a-zA-Z0-9_\-:]+$/', $token)
+            ]);
+        } else {
+            \Log::debug('Valid FCM token', [
+                'token_prefix' => substr($token, 0, 10) . '...',
+                'length' => strlen($token)
+            ]);
+        }
+        
+        return $isValid;
     }
     
     /**
