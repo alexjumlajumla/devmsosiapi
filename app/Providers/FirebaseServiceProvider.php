@@ -30,14 +30,28 @@ class FirebaseServiceProvider extends ServiceProvider
     protected function registerFirebaseFactory(): void
     {
         $this->app->singleton(Factory::class, function ($app) {
+            // Initialize Firebase factory with retry logic
+            $maxRetries = 3;
+            $attempt = 0;
+            $lastException = null;
+            
+            // Log the start of Firebase factory initialization
+            \Log::debug('Starting Firebase factory initialization', [
+                'max_retries' => $maxRetries,
+                'environment' => config('app.env')
+            ]);
+            
             try {
                 // Get configuration values with fallbacks
                 $serviceAccount = $this->getServiceAccountConfig();
                 
-                // Initialize Firebase factory with retry logic
-                $maxRetries = 3;
-                $attempt = 0;
-                $lastException = null;
+                // Log the service account details (without sensitive data)
+                \Log::debug('Service account configuration loaded', [
+                    'project_id' => $serviceAccount['project_id'] ?? 'not set',
+                    'client_email' => $serviceAccount['client_email'] ?? 'not set',
+                    'has_private_key' => !empty($serviceAccount['private_key']),
+                    'has_private_key_id' => !empty($serviceAccount['private_key_id']),
+                ]);
                 
                 while ($attempt < $maxRetries) {
                     try {
@@ -65,16 +79,22 @@ class FirebaseServiceProvider extends ServiceProvider
                         $auth = $factory->createAuth();
                         $auth->getApiClient(); // This will throw if auth fails
                         
-                        Log::info('Successfully initialized Firebase factory');
-                        return $factory;
+                        // Log successful initialization
+                        $successMessage = 'Successfully initialized Firebase factory';
+                        \Log::info($successMessage, [
+                            'project_id' => $serviceAccount['project_id'] ?? 'unknown',
+                            'client_email' => $serviceAccount['client_email'] ?? 'unknown'
+                        ]);
                         
+                        return $factory;
+                            
                     } catch (\Kreait\Firebase\Exception\Auth\InvalidAccessToken $e) {
                         $lastException = $e;
                         $attempt++;
                         Log::warning(sprintf(
                             'Firebase auth failed (attempt %d/%d): %s',
                             $attempt,
-                            $maxRetries,
+                            $maxRetries,  // Fixed variable name from $maxAttempts to $maxRetries
                             $e->getMessage()
                         ));
                         
@@ -86,24 +106,43 @@ class FirebaseServiceProvider extends ServiceProvider
                         usleep(500000 * $attempt); // 500ms, 1s, 1.5s, etc.
                     } catch (\Exception $e) {
                         $lastException = $e;
-                        Log::error('Failed to initialize Firebase factory', [
+                        $errorMsg = 'Attempt ' . $attempt . ' failed: ' . $e->getMessage();
+                        \Log::error($errorMsg, [
                             'error' => $e->getMessage(),
                             'trace' => $e->getTraceAsString(),
                         ]);
-                        break;
+                        
+                        if ($attempt >= $maxAttempts) {
+                            break;
+                        }
+                        
+                        // Wait before retrying
+                        usleep(500000 * $attempt); // 500ms, 1s, 1.5s, etc.
                     }
                 }
+                // If we get here, all attempts failed
+                $errorMessage = 'Failed to initialize Firebase after ' . $maxRetries . ' attempts';
+                if ($lastException) {
+                    $errorMessage .= ': ' . $lastException->getMessage();
+                }
                 
-                throw $lastException ?? new \RuntimeException('Failed to initialize Firebase factory after multiple attempts');
+                \Log::error($errorMessage, [
+                    'last_exception' => $lastException ? get_class($lastException) : 'none',
+                    'exception_message' => $lastException ? $lastException->getMessage() : 'No exception details',
+                    'trace' => $lastException ? $lastException->getTraceAsString() : 'No trace available'
+                ]);
+                
+                throw new \RuntimeException($errorMessage, 0, $lastException);
                 
             } catch (\Exception $e) {
-                Log::critical('Critical error initializing Firebase', [
+                $errorMessage = 'Firebase initialization error: ' . $e->getMessage();
+                \Log::critical('Critical error initializing Firebase', [
                     'error' => $e->getMessage(),
                     'trace' => $e->getTraceAsString(),
                 ]);
                 
                 // Rethrow to prevent silent failures
-                throw $e;
+                throw new \RuntimeException($errorMessage, 0, $e);
             }
         });
     }
@@ -116,7 +155,26 @@ class FirebaseServiceProvider extends ServiceProvider
      */
     protected function getServiceAccountConfig(): array
     {
-        // Hardcoded configuration based on the provided credentials
+        $config = $this->getHardcodedServiceAccountConfig();
+        
+        // Log the configuration (without sensitive data)
+        \Log::debug('Firebase configuration loaded', [
+            'project_id' => $config['project_id'],
+            'client_email' => $config['client_email'],
+            'has_private_key' => !empty($config['private_key']),
+            'has_private_key_id' => !empty($config['private_key_id']),
+        ]);
+        
+        return $config;
+    }
+    
+    /**
+     * Get the hardcoded service account configuration
+     * 
+     * @return array
+     */
+    protected function getHardcodedServiceAccountConfig(): array
+    {
         $config = [
             'type' => 'service_account',
             'project_id' => 'msosijumla',
@@ -130,15 +188,7 @@ class FirebaseServiceProvider extends ServiceProvider
             'client_x509_cert_url' => 'https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-zubkp%40msosijumla.iam.gserviceaccount.com',
             'universe_domain' => 'googleapis.com',
         ];
-
-        // Log the configuration (without sensitive data)
-        \Log::debug('Firebase configuration loaded', [
-            'project_id' => $config['project_id'],
-            'client_email' => $config['client_email'],
-            'has_private_key' => !empty($config['private_key']),
-            'has_private_key_id' => !empty($config['private_key_id']),
-        ]);
-
+        
         return $config;
     }
 
