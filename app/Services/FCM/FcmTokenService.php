@@ -184,15 +184,12 @@ class FcmTokenService
     {
         try {
             if ($notifiable instanceof User) {
-                return $notifiable->getFcmTokens();
+                return $this->getUserTokens($notifiable);
             }
             
-            if (method_exists($notifiable, 'getFcmTokens')) {
-                return $notifiable->getFcmTokens();
-            }
-            
-            if (isset($notifiable->firebase_token)) {
-                $tokens = $notifiable->firebase_token;
+            // For other notifiable entities, try to get tokens using the routeNotificationForFcm method
+            if (method_exists($notifiable, 'routeNotificationForFcm')) {
+                $tokens = $notifiable->routeNotificationForFcm();
                 
                 if (is_string($tokens)) {
                     return $this->isValidFcmToken($tokens) ? [$tokens] : [];
@@ -225,23 +222,54 @@ class FcmTokenService
      */
     protected function getUserTokens(User $user): array
     {
-        $tokens = $user->firebase_token;
-        
-        if (empty($tokens)) {
-            return [];
+        // Use the User model's getFcmTokens method if available
+        if (method_exists($user, 'getFcmTokens')) {
+            return $user->getFcmTokens();
         }
         
-        if (is_string($tokens)) {
-            return [$tokens];
-        }
-        
-        if (is_array($tokens)) {
-            return array_values(array_filter($tokens, function($token) {
-                return is_string($token) && $this->isValidFcmToken($token);
-            }));
+        // Fallback to direct property access for backward compatibility
+        if (isset($user->firebase_token)) {
+            $tokens = $user->firebase_token;
+            
+            if (empty($tokens)) {
+                return [];
+            }
+            
+            // Handle JSON string
+            if (is_string($tokens) && $this->isJson($tokens)) {
+                $tokens = json_decode($tokens, true);
+            }
+            
+            // Handle string token
+            if (is_string($tokens) && $this->isValidFcmToken($tokens)) {
+                return [$tokens];
+            }
+            
+            // Handle array of tokens
+            if (is_array($tokens)) {
+                return array_values(array_filter($tokens, function($token) {
+                    return is_string($token) && $this->isValidFcmToken($token);
+                }));
+            }
         }
         
         return [];
+    }
+    
+    /**
+     * Check if a string is valid JSON
+     * 
+     * @param string $string
+     * @return bool
+     */
+    protected function isJson($string): bool
+    {
+        if (!is_string($string)) {
+            return false;
+        }
+        
+        json_decode($string);
+        return json_last_error() === JSON_ERROR_NONE;
     }
     
     /**

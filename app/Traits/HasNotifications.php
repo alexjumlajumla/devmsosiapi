@@ -66,7 +66,43 @@ trait HasNotifications
      */
     public function routeNotificationForFcm()
     {
-        return $this->fcm_tokens ?? [];
+        // If the model has getFcmTokens method, use it
+        if (method_exists($this, 'getFcmTokens')) {
+            return $this->getFcmTokens();
+        }
+        
+        // Fallback to firebase_token column for backward compatibility
+        if (isset($this->firebase_token)) {
+            if (is_string($this->firebase_token) && $this->isJson($this->firebase_token)) {
+                return json_decode($this->firebase_token, true) ?: [];
+            }
+            
+            if (is_array($this->firebase_token)) {
+                return $this->firebase_token;
+            }
+            
+            if (is_string($this->firebase_token) && !empty($this->firebase_token)) {
+                return [$this->firebase_token];
+            }
+        }
+        
+        return [];
+    }
+    
+    /**
+     * Check if a string is valid JSON
+     * 
+     * @param string $string
+     * @return bool
+     */
+    protected function isJson($string)
+    {
+        if (!is_string($string)) {
+            return false;
+        }
+        
+        json_decode($string);
+        return json_last_error() === JSON_ERROR_NONE;
     }
 
     /**
