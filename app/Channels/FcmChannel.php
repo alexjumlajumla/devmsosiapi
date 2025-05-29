@@ -161,18 +161,25 @@ class FcmChannel
             // Create a new CloudMessage instance
             $message = CloudMessage::new();
             
-            // Set notification if provided
-            if (isset($fcmMessage['notification'])) {
-                $message = $message->withNotification(
-                    $fcmMessage['notification']['title'] ?? null,
-                    $fcmMessage['notification']['body'] ?? null
-                );
-            } elseif (isset($fcmMessage['title']) || isset($fcmMessage['body'])) {
+            // Prepare notification data
+            $notificationData = [];
+            
+            // Handle both formats: with 'notification' key and direct title/body keys
+            if (isset($fcmMessage['notification']) && is_array($fcmMessage['notification'])) {
+                $notificationData = $fcmMessage['notification'];
+            } else {
                 // For backward compatibility with older format
-                $message = $message->withNotification(
-                    $fcmMessage['title'] ?? $this->config['default_title'] ?? 'New Notification',
-                    $fcmMessage['body'] ?? $this->config['default_body'] ?? 'You have a new notification'
-                );
+                if (isset($fcmMessage['title']) || isset($fcmMessage['body'])) {
+                    $notificationData = [
+                        'title' => $fcmMessage['title'] ?? $this->config['default_title'] ?? 'New Notification',
+                        'body' => $fcmMessage['body'] ?? $this->config['default_body'] ?? 'You have a new notification',
+                    ];
+                }
+            }
+            
+            // Set notification if we have data
+            if (!empty($notificationData)) {
+                $message = $message->withNotification($notificationData);
             }
             
             // Set data if provided
@@ -212,10 +219,18 @@ class FcmChannel
     protected function applyDefaultConfig(CloudMessage $message): CloudMessage
     {
         // Get notification data from the message
-        $notification = null;
+        $notification = [];
+        $messageData = [];
+        
         if (method_exists($message, 'jsonSerialize')) {
             $messageData = $message->jsonSerialize();
-            $notification = $messageData['notification'] ?? null;
+            
+            // Handle different formats of notification data
+            if (isset($messageData['notification']) && is_array($messageData['notification'])) {
+                $notification = $messageData['notification'];
+            } elseif (isset($messageData['notification']) && is_string($messageData['notification'])) {
+                $notification = ['body' => $messageData['notification']];
+            }
         }
 
         // Apply Android config
