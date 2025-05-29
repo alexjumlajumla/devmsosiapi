@@ -199,7 +199,6 @@ class User extends Authenticatable implements MustVerifyEmail
      *
      * @var array
      */
-    /**
     protected $casts = [
         'email_verified_at' => 'datetime',
         'firebase_token' => 'array',
@@ -218,37 +217,64 @@ class User extends Authenticatable implements MustVerifyEmail
      *
      * @return array
      */
+    /**
+     * Get the user's FCM tokens
+     *
+     * @return array
+     */
     public function getFcmTokens(): array
     {
         try {
             $tokens = $this->firebase_token;
             
+            \Log::debug('Raw firebase_token in getFcmTokens', [
+                'user_id' => $this->id,
+                'tokens' => $tokens,
+                'tokens_type' => gettype($tokens)
+            ]);
+            
             if (empty($tokens)) {
                 return [];
             }
             
-            // Handle JSON string
-            if (is_string($tokens) && $this->isJson($tokens)) {
-                $tokens = json_decode($tokens, true);
+            // If tokens is a string, try to decode it as JSON
+            if (is_string($tokens)) {
+                $decoded = json_decode($tokens, true);
+                if (json_last_error() === JSON_ERROR_NONE) {
+                    $tokens = $decoded;
+                } else {
+                    // If it's not valid JSON, treat it as a single token
+                    return $this->isValidFcmToken($tokens) ? [$tokens] : [];
+                }
             }
             
-            // Handle string token
-            if (is_string($tokens) && $this->isValidFcmToken($tokens)) {
-                return [$tokens];
-            }
-            
-            // Handle array of tokens
+            // If we have an array, process each token
             if (is_array($tokens)) {
-                return array_values(array_filter($tokens, function($token) {
-                    return is_string($token) && $this->isValidFcmToken($token);
-                }));
+                $validTokens = [];
+                
+                foreach ($tokens as $token) {
+                    if (is_string($token) && $this->isValidFcmToken($token)) {
+                        $validTokens[] = $token;
+                    } elseif (is_array($token)) {
+                        // Handle nested arrays (just in case)
+                        foreach ($token as $nestedToken) {
+                            if (is_string($nestedToken) && $this->isValidFcmToken($nestedToken)) {
+                                $validTokens[] = $nestedToken;
+                            }
+                        }
+                    }
+                }
+                
+                return array_values(array_unique($validTokens));
             }
             
             return [];
         } catch (\Exception $e) {
             \Log::error('Error in getFcmTokens: ' . $e->getMessage(), [
                 'user_id' => $this->id,
-                'token_type' => gettype($this->firebase_token)
+                'token_value' => $this->firebase_token,
+                'token_type' => gettype($this->firebase_token),
+                'trace' => $e->getTraceAsString()
             ]);
             return [];
         }
@@ -292,32 +318,42 @@ class User extends Authenticatable implements MustVerifyEmail
             if (!$this->isValidFcmToken($token)) {
                 \Log::warning('Invalid FCM token format', [
                     'user_id' => $this->id,
-                    'token_prefix' => substr($token, 0, 10) . '...'
+                    'token_prefix' => substr($token, 0, 10) . '...',
+                    'token_length' => strlen($token)
                 ]);
                 return false;
             }
             
             $existingTokens = $this->getFcmTokens();
             
-            // Check if token already exists
+            // If token already exists, return true
             if (in_array($token, $existingTokens, true)) {
-                \Log::debug('FCM token already exists for user', [
+                \Log::debug('Token already exists for user', [
                     'user_id' => $this->id,
-                    'token_count' => count($existingTokens)
+                    'token_prefix' => substr($token, 0, 10) . '...'
                 ]);
-                return false;
+                return true;
             }
             
-            // Add new token and ensure uniqueness
+            // Add the new token
             $existingTokens[] = $token;
             $this->firebase_token = array_values(array_unique($existingTokens));
             
-            \Log::info('Added new FCM token for user', [
-                'user_id' => $this->id,
-                'token_count' => count($existingTokens)
-            ]);
+            $saved = $this->save();
             
-            return true;
+            if ($saved) {
+                \Log::info('Added new FCM token for user', [
+                    'user_id' => $this->id,
+                    'token_count' => count($existingTokens)
+                ]);
+            } else {
+                \Log::error('Failed to save FCM token for user', [
+                    'user_id' => $this->id,
+                    'token_prefix' => substr($token, 0, 10) . '...'
+                ]);
+            }
+            
+            return $saved;
             
         } catch (\Exception $e) {
             \Log::error('Error adding FCM token: ' . $e->getMessage(), [
@@ -337,45 +373,44 @@ class User extends Authenticatable implements MustVerifyEmail
     public function removeFcmToken(string $token): bool
     {
         try {
-            if (empty($token)) {
-                \Log::warning('Attempted to remove empty FCM token', [
-                    'user_id' => $this->id
-                ]);
-                return false;
-            }
-            
             $tokens = $this->getFcmTokens();
-            $initialCount = count($tokens);
+            $originalCount = count($tokens);
             
-            // Filter out the token to remove
+            // Remove the token if it exists
             $tokens = array_values(array_filter($tokens, function($t) use ($token) {
                 return $t !== $token;
             }));
             
-            // If count changed, token was removed
-            if (count($tokens) !== $initialCount) {
-                $this->firebase_token = !empty($tokens) ? $tokens : null;
-                
-                \Log::info('Removed FCM token from user', [
+            // If no tokens were removed, return false
+            if (count($tokens) === $originalCount) {
+                \Log::debug('Token not found for removal', [
                     'user_id' => $this->id,
-                    'token_count' => count($tokens),
-                    'token_removed' => substr($token, 0, 10) . '...'
+                    'token_prefix' => substr($token, 0, 10) . '...'
                 ]);
-                
-                return true;
+                return false;
             }
             
-            \Log::debug('FCM token not found for removal', [
-                'user_id' => $this->id,
-                'token_prefix' => substr($token, 0, 10) . '...'
-            ]);
+            $this->firebase_token = $tokens;
+            $removed = $this->save();
             
-            return false;
+            if ($removed) {
+                \Log::info('Removed FCM token from user', [
+                    'user_id' => $this->id,
+                    'tokens_remaining' => count($tokens)
+                ]);
+            } else {
+                \Log::error('Failed to remove FCM token from user', [
+                    'user_id' => $this->id,
+                    'token_prefix' => substr($token, 0, 10) . '...'
+                ]);
+            }
             
+            return $removed;
         } catch (\Exception $e) {
             \Log::error('Error removing FCM token: ' . $e->getMessage(), [
                 'user_id' => $this->id,
-                'token_prefix' => $token ? substr($token, 0, 10) . '...' : 'empty'
+                'token_prefix' => substr($token, 0, 10) . '...',
+                'trace' => $e->getTraceAsString()
             ]);
             return false;
         }
