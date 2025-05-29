@@ -294,8 +294,24 @@ trait Notification
             return [
                 'status' => 'success',
                 'message' => 'Notification sent via new FCM system',
-                'user_count' => $users->count(),
+                'user_count' => !empty($users) ? $users->count() : count($tokens),
                 'notification_type' => $notificationType,
+                'responses' => $responses
+            ];
+        } catch (\Exception $e) {
+            Log::error('Error sending FCM notification: ' . $e->getMessage(), [
+                'exception' => $e,
+                'trace' => $e->getTraceAsString(),
+                'notification_type' => $notificationType,
+                'title' => $title,
+                'message' => $message
+            ]);
+            
+            return [
+                'status' => 'error',
+                'message' => 'Failed to send notification: ' . $e->getMessage(),
+                'notification_type' => $notificationType,
+                'error' => $e->getMessage()
             ];
         }
     }
