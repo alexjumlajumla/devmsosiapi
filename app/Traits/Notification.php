@@ -273,7 +273,7 @@ trait Notification
             $chunks = array_chunk($tokens, 500);
             
             foreach ($chunks as $chunk) {
-                $message = CloudMessage::new()
+                $cloudMessage = CloudMessage::new()
                     ->withNotification(FcmMessageNotification::create($title, $message))
                     ->withData($fcmData)
                     ->withDefaultSounds()
@@ -288,13 +288,13 @@ trait Notification
                         ],
                     ]);
                 
-                $responses[] = $fcmService->sendToTokens($chunk, $message);
+                $responses[] = $fcmService->sendToTokens($chunk, $cloudMessage);
             }
             
             return [
                 'status' => 'success',
                 'message' => 'Notification sent via new FCM system',
-                'user_count' => !empty($users) ? $users->count() : count($tokens),
+                'user_count' => count($tokens),
                 'notification_type' => $notificationType,
                 'responses' => $responses
             ];
@@ -337,8 +337,25 @@ trait Notification
         ]);
         
         try {
-            // Implementation of storeNotificationInDatabase
-            // ...
+            // Store notification for each user
+            $notifications = [];
+            $now = now();
+            
+            foreach ($userIds as $userId) {
+                $notifications[] = [
+                    'user_id' => $userId,
+                    'type' => $notificationType,
+                    'title' => $title,
+                    'body' => $message,
+                    'data' => $data,
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ];
+            }
+            
+            if (!empty($notifications)) {
+                \DB::table('push_notifications')->insert($notifications);
+            }
             
         } catch (\Exception $e) {
             Log::error('Error storing notification in database: ' . $e->getMessage(), [
@@ -480,17 +497,6 @@ trait Notification
                     'firebase_title' => $firebaseTitle
                 ]);
             }
-        } else {
-            $failureCount += count($chunk);
-            Log::error('Failed to send legacy FCM notification - No response', [
-                'payload' => $logPayload,
-                'message' => $message,
-                'data' => $data,
-                'user_ids' => $userIds,
-                'firebase_title' => $firebaseTitle
-            ]);
-        }
-            }
         }
         
         // Log the overall result
@@ -504,34 +510,6 @@ trait Notification
 
         Log::info('FCM notification result', $result);
         return $result;
-    }
-
-    /**
-     * Get FCM access token
-     * 
-     * @return string
-     * @throws \Exception
-     */
-    protected function getAccessToken(): string
-    {
-        $cacheKey = 'fcm_access_token';
-        
-        return Cache::remember($cacheKey, 3600, function () { // Cache for 1 hour
-            $client = new Client();
-            $client->useApplicationDefaultCredentials();
-            $client->addScope('https://www.googleapis.com/auth/firebase.messaging');
-            
-            try {
-                $token = $client->fetchAccessTokenWithAssertion();
-                return $token['access_token'];
-            } catch (\Exception $e) {
-                Log::error('Failed to get FCM access token', [
-                    'error' => $e->getMessage(),
-                    'trace' => $e->getTraceAsString()
-                ]);
-                throw $e;
-            }
-        });
     }
     
     /**
