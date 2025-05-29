@@ -75,10 +75,6 @@ class FirebaseServiceProvider extends ServiceProvider
                             ]);
                         }
                         
-                        // Test the connection
-                        $auth = $factory->createAuth();
-                        $auth->getApiClient(); // This will throw if auth fails
-                        
                         // Log successful initialization
                         $successMessage = 'Successfully initialized Firebase factory';
                         \Log::info($successMessage, [
