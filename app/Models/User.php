@@ -202,6 +202,7 @@ class User extends Authenticatable implements MustVerifyEmail
     protected $casts = [
         'email_verified_at' => 'datetime',
         'firebase_token' => 'array',
+        'web_push_token' => 'array',
         'notification_settings' => 'array',
     ];
 
@@ -415,23 +416,21 @@ class User extends Authenticatable implements MustVerifyEmail
     public function removeFcmToken(string $token): bool
     {
         try {
-            $tokens = $this->getFcmTokens();
-            $originalCount = count($tokens);
-            
-            // Remove the token if it exists
-            $tokens = array_values(array_filter($tokens, function($t) use ($token) {
-                return $t !== $token;
-            }));
-            
-            // If no tokens were removed, return false
-            if (count($tokens) === $originalCount) {
-                \Log::debug('Token not found for removal', [
-                    'user_id' => $this->id,
-                    'token_prefix' => substr($token, 0, 10) . '...'
-                ]);
+            if (!$this->firebase_token) {
                 return false;
             }
-            
+
+            $tokens = is_array($this->firebase_token) 
+                ? $this->firebase_token 
+                : [$this->firebase_token];
+
+            $initialCount = count($tokens);
+            $tokens = array_values(array_filter($tokens, fn($t) => $t !== $token));
+
+            if (count($tokens) === $initialCount) {
+                return false; // Token not found
+            }
+
             $this->firebase_token = $tokens;
             $removed = $this->save();
             
@@ -456,6 +455,152 @@ class User extends Authenticatable implements MustVerifyEmail
             ]);
             return false;
         }
+    }
+    
+    /**
+     * Add a web push token to the user
+     * 
+     * @param string $token The web push token to add
+     * @return bool True if the token was added, false if it already exists or is invalid
+     */
+    public function addWebPushToken(string $token): bool
+    {
+        try {
+            if (!$this->isValidWebPushToken($token)) {
+                \Log::warning('Invalid web push token format', [
+                    'user_id' => $this->id,
+                    'token_prefix' => substr($token, 0, 20) . '...'
+                ]);
+                return false;
+            }
+
+            $tokens = $this->web_push_token ?? [];
+            
+            // Convert to array if it's a string (shouldn't happen due to $casts, but just in case)
+            if (is_string($tokens)) {
+                $tokens = json_decode($tokens, true) ?: [];
+            }
+            
+            // Check if token already exists
+            if (in_array($token, $tokens)) {
+                return true; // Token already exists, no need to add it again
+            }
+            
+            // Add the new token
+            $tokens[] = $token;
+            $this->web_push_token = array_values(array_unique($tokens));
+            $saved = $this->save();
+            
+            if ($saved) {
+                \Log::info('Added web push token to user', [
+                    'user_id' => $this->id,
+                    'total_web_push_tokens' => count($tokens)
+                ]);
+            } else {
+                \Log::error('Failed to save web push token', [
+                    'user_id' => $this->id,
+                    'token_prefix' => substr($token, 0, 20) . '...'
+                ]);
+            }
+            
+            return $saved;
+        } catch (\Exception $e) {
+            \Log::error('Error adding web push token: ' . $e->getMessage(), [
+                'user_id' => $this->id,
+                'token_prefix' => substr($token, 0, 20) . '...',
+                'trace' => $e->getTraceAsString()
+            ]);
+            return false;
+        }
+    }
+    
+    /**
+     * Remove a web push token from the user
+     * 
+     * @param string $token The web push token to remove
+     * @return bool True if the token was removed, false if it didn't exist
+     */
+    public function removeWebPushToken(string $token): bool
+    {
+        try {
+            if (empty($this->web_push_token)) {
+                return false;
+            }
+            
+            $tokens = $this->web_push_token;
+            
+            // Convert to array if it's a string (shouldn't happen due to $casts, but just in case)
+            if (is_string($tokens)) {
+                $tokens = json_decode($tokens, true) ?: [];
+            }
+            
+            $initialCount = count($tokens);
+            $tokens = array_values(array_filter($tokens, fn($t) => $t !== $token));
+            
+            if (count($tokens) === $initialCount) {
+                return false; // Token not found
+            }
+            
+            $this->web_push_token = $tokens;
+            $removed = $this->save();
+            
+            if ($removed) {
+                \Log::info('Removed web push token from user', [
+                    'user_id' => $this->id,
+                    'tokens_remaining' => count($tokens)
+                ]);
+            } else {
+                \Log::error('Failed to remove web push token from user', [
+                    'user_id' => $this->id,
+                    'token_prefix' => substr($token, 0, 20) . '...'
+                ]);
+            }
+            
+            return $removed;
+        } catch (\Exception $e) {
+            \Log::error('Error removing web push token: ' . $e->getMessage(), [
+                'user_id' => $this->id,
+                'token_prefix' => substr($token, 0, 20) . '...',
+                'trace' => $e->getTraceAsString()
+            ]);
+            return false;
+        }
+    }
+    
+    /**
+     * Check if a web push token is valid
+     * 
+     * @param string $token The token to validate
+     * @return bool True if valid, false otherwise
+     */
+    public function isValidWebPushToken(string $token): bool
+    {
+        // Web push tokens are typically longer and contain specific patterns
+        return is_string($token) && 
+               strlen($token) > 100 && 
+               (str_contains($token, 'key=') || str_contains($token, 'endpoint'));
+    }
+    
+    /**
+     * Get all valid web push tokens for this user
+     * 
+     * @return array
+     */
+    public function getWebPushTokens(): array
+    {
+        if (empty($this->web_push_token)) {
+            return [];
+        }
+        
+        $tokens = $this->web_push_token;
+        
+        // Convert to array if it's a string (shouldn't happen due to $casts, but just in case)
+        if (is_string($tokens)) {
+            $tokens = json_decode($tokens, true) ?: [];
+        }
+        
+        // Filter out any invalid tokens
+        return array_values(array_filter($tokens, [$this, 'isValidWebPushToken']));
     }
     
     /**

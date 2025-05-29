@@ -64,8 +64,10 @@ trait Notification
         mixed $data = [],
         array $userIds = [],
         ?string $firebaseTitle = '',
-        bool $retryOnFailure = true
+        bool $retryOnFailure = true,
+        bool $isWebPush = false
     ): array {
+        $notificationType = data_get($data, 'type', data_get($data, 'order.type', 'general'));
         $logContext = [
             'receivers_count' => count($receivers),
             'title' => $title,
@@ -73,7 +75,8 @@ trait Notification
             'data_type' => gettype($data),
             'user_ids_count' => count($userIds),
             'firebase_title' => $firebaseTitle,
-            'notification_type' => data_get($data, 'type', data_get($data, 'order.type', 'general')),
+            'notification_type' => $notificationType,
+            'is_web_push' => $isWebPush,
         ];
 
         try {
@@ -81,16 +84,24 @@ trait Notification
 
             // If no receivers but we have user IDs, try to get tokens for those users
             if (empty($receivers) && !empty($userIds)) {
-                $receivers = $this->getTokensForUserIds($userIds);
+                $receivers = $this->getTokensForUserIds($userIds, $isWebPush);
                 if (empty($receivers)) {
                     $error = 'No FCM tokens found for the provided user IDs';
-                    Log::warning($error, ['user_ids' => $userIds]);
+                    Log::warning($error, ['user_ids' => $userIds, 'is_web_push' => $isWebPush]);
                     return $this->notificationErrorResponse($error, 'Not found', 404);
                 }
             } elseif (empty($receivers)) {
                 $error = 'No FCM tokens or user IDs provided';
-                Log::warning($error);
+                Log::warning($error, ['is_web_push' => $isWebPush]);
                 return $this->notificationErrorResponse($error, 'Bad request', 400);
+            }
+            
+            // Add web push specific data if this is a web push notification
+            if ($isWebPush) {
+                $data['is_web_push'] = true;
+                $data['click_action'] = $data['click_action'] ?? 'FLUTTER_NOTIFICATION_CLICK';
+                $data['icon'] = $data['icon'] ?? url('/images/logo.png');
+                $data['badge'] = $data['badge'] ?? '/images/badge.png';
             }
 
             // Ensure receivers is an array of valid tokens
@@ -283,35 +294,7 @@ trait Notification
             return [
                 'status' => 'success',
                 'message' => 'Notification sent via new FCM system',
-                'token_count' => count($tokens),
-                'notification_type' => $notificationType,
-                'responses' => $responses,
-            ];
-            
-        } catch (MessagingException $e) {
-            Log::error('FCM messaging error', [
-                'error' => $e->getMessage(),
-                'code' => $e->getCode(),
-                'notification_type' => $notificationType,
-            ]);
-            
-            return [
-                'status' => 'error',
-                'message' => 'FCM messaging error: ' . $e->getMessage(),
-                'code' => $e->getCode(),
-                'notification_type' => $notificationType,
-            ];
-        } catch (\Exception $e) {
-            Log::error('Failed to send FCM notification', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-                'notification_type' => $notificationType,
-            ]);
-            
-            return [
-                'status' => 'error',
-                'message' => 'Failed to send FCM notification: ' . $e->getMessage(),
-                'code' => $e->getCode(),
+                'user_count' => $users->count(),
                 'notification_type' => $notificationType,
             ];
         }
@@ -338,47 +321,6 @@ trait Notification
         ]);
         
         try {
-            (new PushNotificationService)->storeMany([
-                'type' => $notificationType,
-                'title' => $title,
-                'body' => $message,
-                'data' => $data,
-                'sound' => 'default',
-            ], $userIds);
-            
-            Log::info('Successfully stored notification in database', [
-                'user_count' => count($userIds)
-            ]);
-            
-        } catch (\Throwable $e) {
-            Log::error('Failed to store notification in database', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-                'user_ids' => $userIds
-            ]);
-        }
-    }
-    
-    /**
-            
-            return array_unique($tokens);
-            
-        } catch (\Exception $e) {
-            Log::error('Failed to get FCM tokens for user IDs', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-                'user_ids' => $userIds,
-            ]);
-            return [];
-        }
-    }
-    
-    /**
-     * Legacy FCM implementation for backward compatibility
-     * 
-     * @param array $receivers
-     * @param string|null $title
-     * @param string $message
      * @param array $data
      * @param array $userIds
      * @param string|null $firebaseTitle
@@ -498,38 +440,6 @@ trait Notification
                         'status' => $response->status(),
                         'response' => $responseData,
                         'payload' => $logPayload
-                    ]);
-                    
-                    // If it's an authentication error, refresh the token and retry once
-                    if ($response->status() === 401 && $retryOnFailure) {
-                        Log::info('Refreshing FCM access token and retrying...');
-                        Cache::forget('fcm_access_token');
-                        return $this->sendViaLegacyFcm(
-                            $receivers, 
-                            $title, 
-                            $message, 
-                            $data, 
-                            $userIds, 
-                            $firebaseTitle,
-                            false // Prevent infinite retry loop
-                        );
-                    }
-                }
-                
-            } catch (\Exception $e) {
-                $failureCount += count($chunk);
-                Log::error('Exception sending legacy FCM notification', [
-                    'error' => $e->getMessage(),
-                    'trace' => $e->getTraceAsString(),
-                    'chunk_size' => count($chunk),
-                ]);
-                
-                // If we have a connection error, we can retry once
-                if (str_contains($e->getMessage(), 'cURL error 28') && $retryOnFailure) {
-                    Log::info('Retrying FCM notification after connection timeout...');
-                    return $this->sendViaLegacyFcm(
-                        $receivers, 
-                        $title, 
                         $message, 
                         $data, 
                         $userIds, 
