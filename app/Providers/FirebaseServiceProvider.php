@@ -33,9 +33,14 @@ class FirebaseServiceProvider extends ServiceProvider
                 'client_x509_cert_url' => env('FIREBASE_CLIENT_CERT_URL'),
             ];
 
-            $factory = (new Factory)
-                ->withServiceAccount($serviceAccount)
-                ->withDatabaseUri(env('FIREBASE_DATABASE_URL'));
+            $factory = new Factory();
+            $factory = $factory->withServiceAccount($serviceAccount);
+            
+            // Only set database URI if it's configured in the config file
+            $databaseUrl = config('fcm.database_url');
+            if (!empty($databaseUrl)) {
+                $factory = $factory->withDatabaseUri($databaseUrl);
+            }
 
             // Enable HTTP debugging if in debug mode
             if (config('app.debug')) {

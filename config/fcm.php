@@ -46,6 +46,7 @@ return [
     'vapid_key' => env('FIREBASE_VAPID_KEY', 'BDO1IfAhx1-yl1pn7DjkBZi3a0NCAoiPsQLDHSqLXoB5QBxEEmxCTqKQNzPdBYtQXSow5KJlrDzzfph8hSkrsxE'),
     'auth_domain' => env('FIREBASE_AUTH_DOMAIN', 'msosijumla.firebaseapp.com'),
     'storage_bucket' => env('FIREBASE_STORAGE_BUCKET', 'msosijumla.appspot.com'),
+    'database_url' => env('FIREBASE_DATABASE_URL', 'https://msosijumla-default-rtdb.firebaseio.com'),
     
     /*
     |--------------------------------------------------------------------------
