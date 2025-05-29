@@ -19,30 +19,49 @@ class FirebaseServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
+        $this->registerFirebaseFactory();
+        $this->registerFirebaseServices();
+    }
+
+    /**
+     * Register the Firebase factory.
+     */
+    protected function registerFirebaseFactory(): void
+    {
         $this->app->singleton(Factory::class, function ($app) {
+            // Get configuration values
+            $projectId = config('fcm.project_id');
+            $privateKeyId = env('FIREBASE_PRIVATE_KEY_ID');
+            $privateKey = env('FIREBASE_PRIVATE_KEY');
+            $clientEmail = env('FIREBASE_CLIENT_EMAIL');
+            $clientId = env('FIREBASE_CLIENT_ID');
+            $clientCertUrl = env('FIREBASE_CLIENT_CERT_URL');
+            
+            // Create service account configuration
             $serviceAccount = [
                 'type' => 'service_account',
-                'project_id' => config('fcm.project_id'),
-                'private_key_id' => env('FIREBASE_PRIVATE_KEY_ID'),
-                'private_key' => str_replace('\\n', "\n", env('FIREBASE_PRIVATE_KEY')),
-                'client_email' => env('FIREBASE_CLIENT_EMAIL'),
-                'client_id' => env('FIREBASE_CLIENT_ID'),
+                'project_id' => $projectId,
+                'private_key_id' => $privateKeyId,
+                'private_key' => str_replace('\\n', "\n", $privateKey),
+                'client_email' => $clientEmail,
+                'client_id' => $clientId,
                 'auth_uri' => 'https://accounts.google.com/o/oauth2/auth',
                 'token_uri' => 'https://oauth2.googleapis.com/token',
                 'auth_provider_x509_cert_url' => 'https://www.googleapis.com/oauth2/v1/certs',
-                'client_x509_cert_url' => env('FIREBASE_CLIENT_CERT_URL'),
+                'client_x509_cert_url' => $clientCertUrl,
             ];
 
+            // Initialize Firebase factory
             $factory = new Factory();
             $factory = $factory->withServiceAccount($serviceAccount);
             
-            // Only set database URI if it's configured in the config file
+            // Set database URI if configured
             $databaseUrl = config('fcm.database_url');
             if (!empty($databaseUrl)) {
                 $factory = $factory->withDatabaseUri($databaseUrl);
             }
 
-            // Enable HTTP debugging if in debug mode
+            // Enable HTTP debugging in debug mode
             if (config('app.debug')) {
                 $factory->withHttpClientOptions([
                     'debug' => true,
@@ -51,25 +70,30 @@ class FirebaseServiceProvider extends ServiceProvider
 
             return $factory;
         });
+    }
 
-        // Bind Firebase services
-        $this->app->bind(Auth::class, function ($app) {
+    /**
+     * Register Firebase services.
+     */
+    protected function registerFirebaseServices(): void
+    {
+        $this->app->singleton(Auth::class, function ($app) {
             return $app->make(Factory::class)->createAuth();
         });
-
-        $this->app->bind(Firestore::class, function ($app) {
+        
+        $this->app->singleton(Firestore::class, function ($app) {
             return $app->make(Factory::class)->createFirestore();
         });
-
-        $this->app->bind(Messaging::class, function ($app) {
+        
+        $this->app->singleton(Messaging::class, function ($app) {
             return $app->make(Factory::class)->createMessaging();
         });
-
-        $this->app->bind(RemoteConfig::class, function ($app) {
+        
+        $this->app->singleton(RemoteConfig::class, function ($app) {
             return $app->make(Factory::class)->createRemoteConfig();
         });
-
-        $this->app->bind(Storage::class, function ($app) {
+        
+        $this->app->singleton(Storage::class, function ($app) {
             return $app->make(Factory::class)->createStorage();
         });
     }
