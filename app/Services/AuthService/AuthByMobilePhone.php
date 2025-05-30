@@ -97,43 +97,134 @@ class AuthByMobilePhone extends CoreService
 	 */
     public function confirmOPTCode(array $array): JsonResponse
     {
-        if (data_get($array, 'type') !== 'firebase') {
-
-            $data = SmsCode::where("verifyId", data_get($array, 'verifyId'))->first();
+        try {
+            \Log::debug('Starting confirmOPTCode', ['input' => array_merge($array, ['verifyCode' => '***'])]);
             
-            if (empty($data)) {
-                return $this->onErrorResponse([
-                    'code'      => ResponseError::ERROR_404,
-                    'message'   => __('errors.' . ResponseError::ERROR_404, locale: $this->language)
-                ]);
-            }
-            if (Carbon::parse(data_get($data, 'expiredAt')) < now()) {
-                return $this->onErrorResponse([
-                    'code'      => ResponseError::ERROR_203,
-                    'message'   => __('errors.' . ResponseError::ERROR_203, locale: $this->language)
-                ]);
-            }
-            if (data_get($data, 'OTPCode') != data_get($array, 'verifyCode')) {
-                return $this->onErrorResponse([
-                    'code'      => ResponseError::ERROR_201,
-                    'message'   => __('errors.' . ResponseError::ERROR_201, locale: $this->language)
-                ]);
-            }
-            $data->delete();
-            $user = $this->model()->where('phone', data_get($data, 'phone'))->first();
+            $isFirebase = data_get($array, 'type') === 'firebase';
+            $data = [];
+            $user = null;
 
-        } else {
-            $data['phone']      = data_get($array, 'phone');
-            $data['email']      = data_get($array, 'email');
-            $data['referral']   = data_get($array, 'referral');
-            $data['firstname']  = data_get($array, 'firstname');
-            $data['lastname']   = data_get($array, 'lastname');
-            $data['password']   = data_get($array, 'password');
-            $data['gender']     = data_get($array, 'gender', 'male');
-
-            $d = SmsCode::where("verifyId", data_get($array, 'verifyId'))->first();
-            if($d) $d->delete();
+            if (!$isFirebase) {
+                // Standard OTP flow
+                $data = SmsCode::where("verifyId", data_get($array, 'verifyId'))->first();
+                \Log::debug('SmsCode query result', ['found' => (bool)$data, 'verifyId' => data_get($array, 'verifyId')]);
+                
+                if (empty($data)) {
+                    \Log::error('SmsCode not found', ['verifyId' => data_get($array, 'verifyId')]);
+                    return $this->onErrorResponse([
+                        'code'    => ResponseError::ERROR_404,
+                        'message' => __('errors.' . ResponseError::ERROR_404, locale: $this->language)
+                    ]);
+                }
+                
+                if (Carbon::parse($data->expiredAt) < now()) {
+                    \Log::error('OTP code expired', [
+                        'expiredAt' => $data->expiredAt,
+                        'now' => now()
+                    ]);
+                    return $this->onErrorResponse([
+                        'code'    => ResponseError::ERROR_203,
+                        'message' => __('errors.' . ResponseError::ERROR_203, locale: $this->language)
+                    ]);
+                }
+                
+                if ($data->OTPCode != data_get($array, 'verifyCode')) {
+                    \Log::error('Invalid OTP code', [
+                        'expected' => $data->OTPCode,
+                        'received' => data_get($array, 'verifyCode')
+                    ]);
+                    return $this->onErrorResponse([
+                        'code'    => ResponseError::ERROR_201,
+                        'message' => __('errors.' . ResponseError::ERROR_201, locale: $this->language)
+                    ]);
+                }
+                
+                // Cleanup the used OTP
+                $data->delete();
+                
+                // Find or create user
+                $user = $this->model()->where('phone', $data->phone)->first();
+                \Log::debug('User lookup result', ['phone' => $data->phone, 'user_found' => (bool)$user]);
+                
+                if (!$user) {
+                    // Create new user with minimal required fields
+                    $user = $this->model()->create([
+                        'firstname'  => $data->phone, // Default to phone as firstname
+                        'phone'      => $data->phone,
+                        'ip_address' => request()->ip(),
+                        'auth_type'  => 'phone',
+                        'active'     => true,
+                        'phone_verified_at' => now(),
+                    ]);
+                    \Log::info('New user created during OTP verification', ['user_id' => $user->id]);
+                }
+                
+            } else {
+                // Firebase OTP flow
+                $phone = data_get($array, 'phone');
+                if (empty($phone)) {
+                    return $this->onErrorResponse([
+                        'code'    => ResponseError::ERROR_400,
+                        'message' => 'Phone number is required'
+                    ]);
+                }
+                
+                // Find or create user
+                $user = $this->model()->where('phone', $phone)->first();
+                \Log::debug('Firebase user lookup', ['phone' => $phone, 'user_found' => (bool)$user]);
+                
+                if (!$user) {
+                    // Create new user with provided data
+                    $userData = [
+                        'firstname'  => data_get($array, 'firstname', $phone),
+                        'lastname'   => data_get($array, 'lastname', ''),
+                        'email'      => data_get($array, 'email'),
+                        'phone'      => $phone,
+                        'password'   => bcrypt(data_get($array, 'password', Str::random(10))),
+                        'ip_address' => request()->ip(),
+                        'auth_type'  => 'firebase',
+                        'active'     => true,
+                        'phone_verified_at' => now(),
+                    ];
+                    
+                    $user = $this->model()->create($userData);
+                    \Log::info('New user created during Firebase OTP verification', ['user_id' => $user->id]);
+                }
+                
+                // Clean up any existing verification codes
+                $d = SmsCode::where("verifyId", data_get($array, 'verifyId'))->first();
+                if ($d) {
+                    $d->delete();
+                }
+            }
             
+            // Ensure user has a role
+            $this->ensureUserHasRole($user);
+            
+            // Ensure user has a wallet
+            if (empty($user->wallet?->uuid)) {
+                $user = (new UserWalletService)->create($user);
+            }
+            
+            // Generate auth token
+            $token = $user->createToken('api_token')->plainTextToken;
+            
+            return $this->successResponse(__('errors.'. ResponseError::SUCCESS, locale: $this->language), [
+                'token' => $token,
+                'user'  => UserResource::make($user),
+            ]);
+            
+        } catch (\Exception $e) {
+            \Log::error('Error in confirmOPTCode', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'input' => array_merge($array, ['verifyCode' => '***'])
+            ]);
+            
+            return $this->onErrorResponse([
+                'code'    => ResponseError::ERROR_400,
+                'message' => 'An error occurred during authentication. Please try again.'
+            ]);
         }
 
         // If email already belongs to another user, return error early
@@ -263,9 +354,9 @@ class AuthByMobilePhone extends CoreService
     {
         $user = User::withTrashed()->where('phone', str_replace('+', '', data_get($data, 'phone')))->first();
 
-		if (empty($user)) {
-			return $this->onErrorResponse(['code' => ResponseError::ERROR_404]);
-		}
+        if (empty($user)) {
+            return $this->onErrorResponse(['code' => ResponseError::ERROR_404]);
+        }
 
         if (!empty($user->deleted_at)) {
             $user->update([
@@ -281,6 +372,10 @@ class AuthByMobilePhone extends CoreService
         ]);
     }
 
+    /**
+     * @param array $array
+     * @return JsonResponse
+     */
     public function confirmOTP(array $array): JsonResponse
     {   
         $data = SmsCode::where("verifyId", data_get($array, 'verifyId'))->first();
@@ -312,7 +407,47 @@ class AuthByMobilePhone extends CoreService
             'result' => true,
             'message'  => 'Verified',
         ]);
-
     }
 
+    /**
+     * Ensure the user has a default role assigned
+     * 
+     * @param \App\Models\User $user
+     * @return void
+     * @throws \Exception
+     */
+    protected function ensureUserHasRole($user)
+    {
+        try {
+            if (!$user) {
+                throw new \Exception('User object is null');
+            }
+            
+            // Check if user has any roles
+            if ($user->roles->isEmpty()) {
+                // Get the default role (usually 'user')
+                $defaultRole = Role::where('name', 'user')->first();
+                
+                if (!$defaultRole) {
+                    // Create the default role if it doesn't exist
+                    $defaultRole = Role::create(['name' => 'user', 'guard_name' => 'api']);
+                    \Log::info('Created default user role');
+                }
+                
+                // Assign the role to the user
+                $user->syncRoles([$defaultRole->name]);
+                \Log::info('Assigned default role to user', [
+                    'user_id' => $user->id,
+                    'role' => $defaultRole->name
+                ]);
+            }
+        } catch (\Exception $e) {
+            \Log::error('Error ensuring user role', [
+                'user_id' => $user->id ?? 'unknown',
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            throw $e;
+        }
+    }
 }
