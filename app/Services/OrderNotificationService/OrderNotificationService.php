@@ -130,27 +130,74 @@ class OrderNotificationService
      * @return void
      * @throws \Exception
      */
+    /**
+     * Send push notifications to all relevant parties (customer, admin, seller)
+     */
     protected function sendPushNotification(Order $order, string $eventType): void
     {
         try {
-            if (!$order->user) {
-                Log::warning('Cannot send push notification: No user associated with order', [
-                    'order_id' => $order->id,
-                ]);
-                return;
-            }
-
             $title = 'Order Update';
             $message = $this->buildPushMessage($order, $eventType);
             
-            // Get user's FCM tokens using the getFcmTokens method
-            $tokens = $order->user->getFcmTokens();
+            // 1. Send to customer (order owner)
+            if ($order->user) {
+                $this->sendToUser($order->user, $title, $message, [
+                    'id' => (string) $order->id,
+                    'order_id' => (string) $order->id,
+                    'status' => $order->status,
+                    'type' => 'order_update',
+                    'event_type' => $eventType,
+                ]);
+            }
             
-            // If no tokens found, try to use a test token for the user
-            if (empty($tokens)) {
-                $testToken = 'test_fcm_token_user_' . $order->user->id;
+            // 2. Send to shop owner/seller
+            if ($order->shop && $order->shop->user) {
+                $this->sendToUser($order->shop->user, "New Order #{$order->id}", 
+                    "New order #{$order->id} has been placed in your shop", [
+                        'id' => (string) $order->id,
+                        'order_id' => (string) $order->id,
+                        'status' => $order->status,
+                        'type' => 'new_order',
+                        'event_type' => 'new_order',
+                    ]);
+            }
+            
+            // 3. Send to admins
+            $admins = \App\Models\User::role('admin')->get();
+            foreach ($admins as $admin) {
+                $this->sendToUser($admin, "New Order #{$order->id}", 
+                    "New order #{$order->id} has been placed", [
+                        'id' => (string) $order->id,
+                        'order_id' => (string) $order->id,
+                        'status' => $order->status,
+                        'type' => 'new_order',
+                        'event_type' => 'new_order',
+                    ]);
+            }
+            
+        } catch (\Exception $e) {
+            Log::error('Error in sendPushNotification: ' . $e->getMessage(), [
+                'order_id' => $order->id,
+                'exception' => $e
+            ]);
+        }
+    }
+    
+    /**
+     * Send notification to a specific user with proper token handling
+     */
+    protected function sendToUser($user, $title, $message, $data = [])
+    {
+        try {
+            // Get user's FCM tokens using the getFcmTokens method
+            $tokens = $user->getFcmTokens();
+            
+            // If no tokens found, use a test token for the user in development/staging
+            if (empty($tokens) && app()->environment('local', 'staging', 'development')) {
+                $testToken = 'test_fcm_token_' . ($user->hasRole('admin') ? 'admin_' : 'user_') . $user->id;
                 Log::info('No FCM tokens found for user, using test token', [
-                    'user_id' => $order->user->id,
+                    'user_id' => $user->id,
+                    'user_type' => $user->hasRole('admin') ? 'admin' : 'user',
                     'test_token' => $testToken
                 ]);
                 $tokens = [$testToken];
@@ -158,30 +205,14 @@ class OrderNotificationService
             
             if (empty($tokens)) {
                 Log::warning('No FCM tokens found for user', [
-                    'user_id' => $order->user->id,
-                    'order_id' => $order->id,
-                    'user_has_tokens' => !empty($order->user->firebase_token),
+                    'user_id' => $user->id,
+                    'user_type' => $user->hasRole('admin') ? 'admin' : 'user'
                 ]);
                 return;
             }
             
-            Log::debug('FCM tokens found for order notification', [
-                'user_id' => $order->user->id,
-                'order_id' => $order->id,
-                'token_count' => count($tokens),
-                'token_sample' => !empty($tokens) ? substr(
-                    json_encode($tokens[0] ?? '', JSON_THROW_ON_ERROR), 
-                    0, 
-                    50
-                ) . '...' : 'none',
-            ]);
-            
-            // Prepare notification data
-            $data = [
-                'id' => (string) $order->id,
-                'order_id' => (string) $order->id,
-                'status' => $order->status,
-                'type' => 'order_update',
+            // Add common notification data
+            $notificationData = array_merge([
                 'click_action' => 'FLUTTER_NOTIFICATION_CLICK',
                 'notification_created_at' => now()->toDateTimeString(),
                 'sound' => 'default',
@@ -190,49 +221,31 @@ class OrderNotificationService
                 'visibility' => 'public',
                 'vibrate' => '300',
                 'badge' => 1,
-                'event_type' => $eventType,
-            ];
+            ], $data);
             
-            Log::debug('Sending push notification with data', [
-                'user_id' => $order->user->id,
-                'order_id' => $order->id,
+            Log::debug('Sending push notification', [
+                'user_id' => $user->id,
                 'title' => $title,
                 'message' => $message,
-                'data' => $data,
+                'data' => $notificationData,
                 'token_count' => count($tokens),
+                'token_sample' => !empty($tokens) ? substr(implode(',', $tokens), 0, 50) . '...' : 'none',
             ]);
             
-            // Send notification using the Notification trait
-            $result = $this->sendNotification(
-                $tokens,           // tokens
-                $message,          // message
-                $title,            // title
-                $data,             // data
-                [$order->user->id],// userIds
-                'order_update',    // type
-                true               // isChat
+            // Send notification
+            $this->sendNotification(
+                $tokens,
+                $title,
+                $message,
+                $notificationData,
+                [$user->id],
+                $title // Use title as firebase_title
             );
             
-            Log::debug('Push notification send result', [
-                'order_id' => $order->id,
-                'result' => $result,
-                'success' => $result['status'] === 'success',
-                'message' => $result['message'] ?? 'No message',
-                'tokens_sent' => $result['sent'] ?? 0,
-                'tokens_failed' => $result['failed'] ?? 0,
-                'errors' => $result['errors'] ?? [],
-            ]);
-            
-            Log::info('Push notification sent for order', [
-                'order_id' => $order->id,
-                'user_id' => $order->user->id,
-                'event_type' => $eventType,
-            ]);
-        } catch (Exception $e) {
-            Log::error('Failed to send push notification', [
-                'order_id' => $order->id,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
+        } catch (\Exception $e) {
+            Log::error('Error in sendToUser: ' . $e->getMessage(), [
+                'user_id' => $user->id,
+                'exception' => $e
             ]);
         }
     }

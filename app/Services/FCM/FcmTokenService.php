@@ -353,18 +353,17 @@ class FcmTokenService
                 ]);
             }
         }
-        
         return $totalRemoved;
     }
     
     /**
      * Send a message to specific FCM tokens
      * 
-     * @param array $tokens
-     * @param CloudMessage $message
+     * @param array $tokens Array of FCM tokens
+     * @param \Kreait\Firebase\Messaging\CloudMessage $message The message to send
      * @return array
      */
-    public function sendToTokens(array $tokens, CloudMessage $message): array
+    public function sendToTokens(array $tokens, $message): array
     {
         if (empty($tokens)) {
             return [
@@ -373,77 +372,102 @@ class FcmTokenService
                 'sent' => 0,
                 'failed' => 0,
                 'invalid_tokens' => [],
+                'is_test' => false
             ];
         }
-        
-        $allowTestTokens = filter_var(env('FIREBASE_ALLOW_TEST_TOKENS', 'true'), FILTER_VALIDATE_BOOLEAN);
+
+        // Check for test tokens and environment settings
         $isTestEnv = app()->environment('local', 'staging', 'development');
+        $allowTestTokens = filter_var(env('FIREBASE_ALLOW_TEST_TOKENS', 'true'), FILTER_VALIDATE_BOOLEAN);
         
-        // Separate test tokens from real tokens
+        // Filter out test tokens if not allowed
         $testTokens = [];
-        $realTokens = [];
+        $validTokens = [];
         
         foreach ($tokens as $token) {
-            if (str_starts_with($token, 'test_fcm_token_') || str_starts_with($token, 'test_')) {
+            if (is_string($token) && (str_starts_with($token, 'test_fcm_token_') || str_starts_with($token, 'test_'))) {
                 $testTokens[] = $token;
-            } else {
-                $realTokens[] = $token;
+            } else if (!empty($token)) {
+                $validTokens[] = $token;
             }
         }
         
-        // Handle test tokens in test environments or when explicitly allowed
-        if (!empty($testTokens) && ($allowTestTokens || $isTestEnv)) {
+        // Handle test tokens in test environments
+        if ($isTestEnv && $allowTestTokens && !empty($testTokens)) {
             $this->log('info', 'Processing test tokens in test environment', [
                 'test_token_count' => count($testTokens),
-                'test_tokens_sample' => array_slice($testTokens, 0, 3),
-                'environment' => app()->environment(),
-                'FIREBASE_ALLOW_TEST_TOKENS' => $allowTestTokens ? 'true' : 'false',
-                'has_real_tokens' => !empty($realTokens) ? 'true' : 'false'
+                'valid_token_count' => count($validTokens),
+                'test_token_sample' => !empty($testTokens) ? substr($testTokens[0], 0, 15) . '...' : 'none',
             ]);
             
-            // In test environment, we'll simulate success for test tokens
-            // but we won't actually send them to FCM
-            $simulatedSuccessCount = 0;
-            $simulatedResponses = [];
-            
-            foreach ($testTokens as $token) {
-                $simulatedResponses[] = [
+            // Simulate success for test tokens
+            $testResponses = array_map(function($token) {
+                return [
                     'success' => true,
                     'message' => 'Test token processed (not sent to FCM)',
                     'token' => $token,
-                    'message_id' => 'simulated:' . uniqid()
+                    'message_id' => 'test:' . uniqid(),
+                    'is_test' => true
                 ];
-                $simulatedSuccessCount++;
-            }
+            }, $testTokens);
             
             // If we only have test tokens, return early with simulated success
-            if (empty($realTokens)) {
+            if (empty($validTokens)) {
                 return [
                     'success' => true,
                     'message' => 'Test tokens processed (not sent to FCM)',
-                    'sent' => $simulatedSuccessCount,
+                    'sent' => count($testTokens),
                     'failed' => 0,
                     'invalid_tokens' => [],
                     'is_test' => true,
-                    'responses' => $simulatedResponses
+                    'responses' => $testResponses
                 ];
             }
             
-            // Log that we're proceeding with real tokens
-            $this->log('info', 'Proceeding with real tokens after processing test tokens', [
-                'real_token_count' => count($realTokens),
-                'test_token_count' => count($testTokens)
-            ]);
+            // Process real tokens and combine with test responses
+            $realResponse = $this->sendToFcm($validTokens, $message);
             
-            // Return the simulated responses for test tokens along with real token processing
+            return [
+                'success' => $realResponse['success'],
+                'message' => 'Mixed tokens processed',
+                'sent' => $realResponse['sent'] + count($testTokens),
+                'failed' => $realResponse['failed'],
+                'invalid_tokens' => $realResponse['invalid_tokens'],
+                'responses' => array_merge($testResponses, $realResponse['responses'] ?? []),
+                'is_mixed' => true
+            ];
+        }
+        
+        // If we reach here, either test tokens are not allowed or there are no test tokens
+        if (!empty($testTokens) && !$allowTestTokens) {
+            $this->log('warning', 'Test tokens found but not allowed', [
+                'test_token_count' => count($testTokens),
+                'test_token_sample' => substr($testTokens[0] ?? '', 0, 15) . '...',
+                'environment' => app()->environment(),
+                'FIREBASE_ALLOW_TEST_TOKENS' => env('FIREBASE_ALLOW_TEST_TOKENS')
+            ]);
+        }
+        
+        // Only process valid tokens
+        return $this->sendToFcm($validTokens, $message);
+    }
+    
+    /**
+     * Send messages to FCM tokens
+     * 
+     * @param array $tokens Array of FCM tokens
+     * @param \Kreait\Firebase\Messaging\CloudMessage $message The message to send
+     * @return array
+     */
+    protected function sendToFcm(array $tokens, $message): array
+    {
+        if (empty($tokens)) {
             return [
                 'success' => true,
-                'message' => 'Mixed tokens processed',
-                'sent' => $simulatedSuccessCount,
+                'message' => 'No valid tokens to process',
+                'sent' => 0,
                 'failed' => 0,
-                'invalid_tokens' => [],
-                'is_test' => true,
-                'responses' => $simulatedResponses
+                'invalid_tokens' => []
             ];
         }
         
@@ -452,21 +476,6 @@ class FcmTokenService
         $invalidTokens = [];
         $sentCount = 0;
         $failedCount = 0;
-        
-        // Only process real tokens
-        $tokens = $realTokens;
-        
-        // If no real tokens to process, return early
-        if (empty($tokens)) {
-            return [
-                'success' => true,
-                'message' => 'No real FCM tokens to process',
-                'sent' => 0,
-                'failed' => 0,
-                'invalid_tokens' => [],
-                'is_test' => !empty($testTokens)
-            ];
-        }
         
         // Process in chunks to avoid hitting FCM limits
         $chunks = array_chunk($tokens, 500);
