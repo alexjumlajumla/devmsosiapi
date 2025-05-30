@@ -578,7 +578,12 @@ class FcmTokenService
             return false;
         }
 
-        $allowTestTokens = filter_var(env('FIREBASE_ALLOW_TEST_TOKENS', 'true'), FILTER_VALIDATE_BOOLEAN);
+        // Get environment variables with proper type casting
+        $allowTestTokens = env('FIREBASE_ALLOW_TEST_TOKENS', 'false');
+        $allowTestTokens = is_string($allowTestTokens) 
+            ? filter_var($allowTestTokens, FILTER_VALIDATE_BOOLEAN)
+            : (bool)$allowTestTokens;
+            
         $isTestEnv = app()->environment('local', 'staging', 'development');
         $environment = app()->environment();
         $tokenPrefix = substr($token, 0, 15) . '...';
@@ -591,7 +596,9 @@ class FcmTokenService
                     'token_prefix' => $tokenPrefix,
                     'length' => $tokenLength,
                     'user_id' => $this->extractUserIdFromToken($token),
-                    'environment' => $environment
+                    'environment' => $environment,
+                    'allow_test_tokens' => $allowTestTokens,
+                    'is_test_environment' => $isTestEnv
                 ]);
                 return true;
             }

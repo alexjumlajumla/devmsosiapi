@@ -212,6 +212,12 @@ class OrderNotificationService
                 return false;
             }
 
+            // Get environment settings with proper type casting
+            $allowTestTokens = env('FIREBASE_ALLOW_TEST_TOKENS', 'false');
+            $allowTestTokens = is_string($allowTestTokens) 
+                ? filter_var($allowTestTokens, FILTER_VALIDATE_BOOLEAN)
+                : (bool)$allowTestTokens;
+                
             $isTestEnv = app()->environment('local', 'staging', 'development');
             
             // Get user's FCM tokens
@@ -221,30 +227,44 @@ class OrderNotificationService
                 'user_id' => $user->id,
                 'tokens_count' => count($tokens),
                 'environment' => app()->environment(),
-                'is_test_env' => $isTestEnv
+                'is_test_env' => $isTestEnv,
+                'allow_test_tokens' => $allowTestTokens
             ]);
             
-            // Handle test environment
-            if ($isTestEnv) {
+            // Handle test tokens
+            if ($isTestEnv && $allowTestTokens) {
                 // In test environment, we can use test tokens
                 if (empty($tokens)) {
                     $testToken = 'test_fcm_token_' . ($user->hasRole('admin') ? 'admin_' : 'user_') . $user->id;
                     Log::info('Using test FCM token in test environment', [
                         'user_id' => $user->id,
-                        'test_token' => $testToken
+                        'test_token' => $testToken,
+                        'environment' => app()->environment(),
+                        'allow_test_tokens' => $allowTestTokens
                     ]);
                     $tokens = [$testToken];
                 }
             } else {
-                // In production, filter out test tokens
+                // In production or when test tokens are not allowed, filter out test tokens
+                $originalCount = count($tokens);
                 $tokens = array_filter($tokens, function($token) {
                     return !str_starts_with($token, 'test_fcm_token_');
                 });
                 
-                if (empty($tokens)) {
-                    Log::warning('No valid FCM tokens found for user in production', [
+                if (count($tokens) !== $originalCount) {
+                    Log::info('Filtered out test tokens', [
                         'user_id' => $user->id,
-                        'environment' => app()->environment()
+                        'original_count' => $originalCount,
+                        'filtered_count' => count($tokens)
+                    ]);
+                }
+                
+                if (empty($tokens)) {
+                    Log::warning('No valid FCM tokens found for user', [
+                        'user_id' => $user->id,
+                        'environment' => app()->environment(),
+                        'allow_test_tokens' => $allowTestTokens,
+                        'is_test_environment' => $isTestEnv
                     ]);
                     return false;
                 }
