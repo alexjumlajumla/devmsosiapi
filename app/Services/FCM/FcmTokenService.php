@@ -484,11 +484,20 @@ class FcmTokenService
             return false;
         }
 
-        // Reject test tokens (starting with 'test_fcm_token_' or 'test_')
-        if (str_starts_with($token, 'test_fcm_token_') || str_starts_with($token, 'test_')) {
-            \Log::warning('Rejected test FCM token', [
-                'token' => $token,
-                'reason' => 'Test tokens are not allowed for production notifications'
+        // Allow test tokens in non-production environments
+        if (app()->environment('local', 'staging', 'development')) {
+            if (str_starts_with($token, 'test_fcm_token_') || str_starts_with($token, 'test_')) {
+                \Log::debug('Accepted test FCM token in non-production environment', [
+                    'token_prefix' => substr($token, 0, 15) . '...',
+                    'environment' => app()->environment()
+                ]);
+                return true;
+            }
+        } else if (str_starts_with($token, 'test_fcm_token_') || str_starts_with($token, 'test_')) {
+            // Reject test tokens in production
+            \Log::warning('Rejected test FCM token in production', [
+                'token_prefix' => substr($token, 0, 15) . '...',
+                'reason' => 'Test tokens are not allowed in production environment'
             ]);
             return false;
         }

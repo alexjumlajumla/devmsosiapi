@@ -63,11 +63,15 @@ class FirebaseTokenService
             return false;
         }
 
-        // In development, accept test tokens
-        if (app()->environment('local', 'development') && 
+        // Check if test tokens should be allowed (for testing in production)
+        $allowTestTokens = config('firebase.allow_test_tokens', false);
+        
+        if (($allowTestTokens || app()->environment('local', 'development')) && 
             (str_starts_with($token, 'test_fcm_token_') || str_starts_with($token, 'test_'))) {
-            Log::debug('Accepting test FCM token in development', [
-                'token_prefix' => substr($token, 0, 10) . '...'
+            Log::debug('Accepting test FCM token', [
+                'token_prefix' => substr($token, 0, 10) . '...',
+                'environment' => app()->environment(),
+                'allow_test_tokens' => $allowTestTokens
             ]);
             return true;
         }

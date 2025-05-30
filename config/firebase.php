@@ -5,6 +5,16 @@ declare(strict_types=1);
 return [
     /*
      * ------------------------------------------------------------------------
+     * Firebase Test Tokens
+     * ------------------------------------------------------------------------
+     * Allow test tokens in production for testing purposes.
+     * Set to true to accept test tokens (starting with 'test_' or 'test_fcm_token_') in production.
+     * WARNING: Only enable this for testing purposes.
+     */
+    'allow_test_tokens' => env('FIREBASE_ALLOW_TEST_TOKENS', false),
+
+    /*
+     * ------------------------------------------------------------------------
      * Default Firebase project
      * ------------------------------------------------------------------------
      */
