@@ -8,6 +8,7 @@ use App\Models\Notification;
 use Illuminate\Support\Facades\DB;
 use App\Models\SmsCode;
 use App\Models\User;
+use App\Models\Role;
 use App\Services\CoreService;
 use App\Services\SMSGatewayService\SMSBaseService;
 use App\Services\UserServices\UserWalletService;
@@ -168,6 +169,28 @@ class AuthByMobilePhone extends CoreService
                         'user_id' => $user->id,
                         'attempt' => $attempt
                     ]);
+                    
+                    // Send SMS verification
+                    try {
+                        return $this->proceedWithSmsVerification($user, $phone);
+                    } catch (\Exception $smsEx) {
+                        // Log the error but continue
+                        \Log::error('Failed to send SMS verification', [
+                            'user_id' => $user->id,
+                            'error' => $smsEx->getMessage(),
+                            'trace' => $smsEx->getTraceAsString()
+                        ]);
+                        
+                        // Return success response even if SMS fails
+                        return $this->successResponse(
+                            __('auth.successful_login', locale: $this->language),
+                            [
+                                'token' => $user->createToken('api_token')->plainTextToken,
+                                'token_type' => 'Bearer',
+                                'user' => UserResource::make($user)
+                            ]
+                        );
+                    }
                     
                     // Break out of the retry loop on success
                     break;
@@ -391,18 +414,9 @@ class AuthByMobilePhone extends CoreService
                         'user_found' => (bool)$user,
                         'user_id' => $user->id ?? null
                     ]);
-                } catch (\Exception $e) {
-                    \Log::error('Error looking up user', [
-                        'phone' => $data->phone,
-                        'error' => $e->getMessage(),
-                        'trace' => $e->getTraceAsString()
-                    ]);
-                    throw new \Exception('Error verifying your account. Please try again.');
-                }
-                
-                if (!$user) {
-                    // Create new user with minimal required fields
-                    try {
+                    
+                    if (!$user) {
+                        // Create new user with minimal required fields
                         $userData = [
                             'firstname'  => $data->phone, // Default to phone as firstname
                             'phone'      => $data->phone,
@@ -426,14 +440,20 @@ class AuthByMobilePhone extends CoreService
                             'phone' => $user->phone
                         ]);
                         
-                    } catch (\Exception $e) {
-                        \Log::error('Error creating user in confirmOPTCode', [
-                            'phone' => $data->phone,
-                            'error' => $e->getMessage(),
-                            'trace' => $e->getTraceAsString()
-                        ]);
-                        throw new \Exception('Failed to create user account. Please try again.');
+                        // Assign default role
+                        $this->ensureUserHasRole($user);
                     }
+                    
+                    // Use proceedWithSmsVerification to handle the response
+                    return $this->proceedWithSmsVerification($user, $data->phone);
+                    
+                } catch (\Exception $e) {
+                    \Log::error('Error in user creation/lookup', [
+                        'phone' => $data->phone,
+                        'error' => $e->getMessage(),
+                        'trace' => $e->getTraceAsString()
+                    ]);
+                    throw new \Exception('Error verifying your account. Please try again.');
                 }
                 
             } else {
@@ -454,18 +474,9 @@ class AuthByMobilePhone extends CoreService
                         'user_found' => (bool)$user,
                         'user_id' => $user->id ?? null
                     ]);
-                } catch (\Exception $e) {
-                    \Log::error('Error in Firebase user lookup', [
-                        'phone' => $phone,
-                        'error' => $e->getMessage(),
-                        'trace' => $e->getTraceAsString()
-                    ]);
-                    throw new \Exception('Error verifying your account. Please try again.');
-                }
-                
-                if (!$user) {
-                    // Create new user with provided data
-                    try {
+                    
+                    if (!$user) {
+                        // Create new user with provided data
                         $userData = [
                             'firstname'  => data_get($array, 'firstname', $phone),
                             'lastname'   => data_get($array, 'lastname', ''),
@@ -496,14 +507,20 @@ class AuthByMobilePhone extends CoreService
                             'phone' => $user->phone
                         ]);
                         
-                    } catch (\Exception $e) {
-                        \Log::error('Error creating Firebase user', [
-                            'phone' => $phone,
-                            'error' => $e->getMessage(),
-                            'trace' => $e->getTraceAsString()
-                        ]);
-                        throw new \Exception('Failed to create your account. Please try again.');
+                        // Assign default role
+                        $this->ensureUserHasRole($user);
                     }
+                    
+                    // Use proceedWithSmsVerification to handle the response
+                    return $this->proceedWithSmsVerification($user, $phone);
+                    
+                } catch (\Exception $e) {
+                    \Log::error('Error in Firebase user creation/lookup', [
+                        'phone' => $phone,
+                        'error' => $e->getMessage(),
+                        'trace' => $e->getTraceAsString()
+                    ]);
+                    throw new \Exception('Error verifying your account. Please try again.');
                 }
                 
                 // Clean up any existing verification codes
