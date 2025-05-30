@@ -102,11 +102,52 @@ class AuthByMobilePhone extends CoreService
                         'data' => array_merge($userData, ['password' => '***'])
                     ]);
                     
-                    // Try to create the user
-                    $user = $this->model()->create($userData);
-                    
-                    if (!$user) {
-                        throw new \Exception('User model create() returned null');
+                    // Try to create the user with detailed error handling
+                    try {
+                        // First, check if user with this phone already exists (race condition check)
+                        if ($this->model()->where('phone', $phone)->exists()) {
+                            throw new \Exception('User with this phone number already exists');
+                        }
+                        
+                        // Try to create the user
+                        $user = new $this->model();
+                        $user->fill($userData);
+                        
+                        // Save and check for errors
+                        if (!$user->save()) {
+                            throw new \Exception('Failed to save user model');
+                        }
+                        
+                        // Verify the user was saved
+                        if (!$user->exists || !$user->id) {
+                            throw new \Exception('User model was not saved correctly');
+                        }
+                        
+                    } catch (\Exception $createEx) {
+                        // Log detailed error information
+                        $errorInfo = [
+                            'error' => $createEx->getMessage(),
+                            'data' => $userData,
+                            'trace' => $createEx->getTraceAsString(),
+                            'db_error' => $createEx instanceof \PDOException ? $createEx->getMessage() : 'Not a database error'
+                        ];
+                        
+                        // Check for database errors
+                        if ($createEx->getPrevious() instanceof \PDOException) {
+                            $pdoEx = $createEx->getPrevious();
+                            $errorInfo['pdo_error'] = [
+                                'code' => $pdoEx->getCode(),
+                                'message' => $pdoEx->getMessage(),
+                                'sql_state' => $pdoEx->errorInfo[0] ?? null,
+                                'driver_code' => $pdoEx->errorInfo[1] ?? null,
+                                'driver_message' => $pdoEx->errorInfo[2] ?? null,
+                            ];
+                        }
+                        
+                        \Log::error('Detailed user creation error', $errorInfo);
+                        
+                        // Re-throw with a more specific message
+                        throw new \Exception('Failed to create user: ' . $createEx->getMessage());
                     }
                     
                     // Verify the user was actually saved
@@ -135,8 +176,11 @@ class AuthByMobilePhone extends CoreService
                         ]);
                     }
                     
-                    // Return the user even if role assignment failed
-                    return $user;
+                    // Return success response with user data
+                    return $this->successResponse(__('User successfully created', [], $this->language), [
+                        'user' => $user,
+                        'status' => true
+                    ]);
                     
                 } catch (\Exception $e) {
                     // Log detailed error information
@@ -163,7 +207,11 @@ class AuthByMobilePhone extends CoreService
             }
             
             if (!$user) {
-                throw new \Exception('Failed to create or update user');
+                \Log::error('Failed to create or update user', [
+                    'phone' => $phone,
+                    'trace' => debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 5)
+                ]);
+                throw new \Exception('Failed to create or update user. Please try again later.');
             }
             
             // Send SMS with verification code
@@ -219,6 +267,15 @@ class AuthByMobilePhone extends CoreService
             $isFirebase = data_get($array, 'type') === 'firebase';
             $data = [];
             $user = null;
+            
+            // Log database connection status
+            try {
+                $dbConnected = \DB::connection()->getPdo() ? true : false;
+                \Log::debug('Database connection status', ['connected' => $dbConnected]);
+            } catch (\Exception $e) {
+                \Log::error('Database connection error', ['error' => $e->getMessage()]);
+                throw new \Exception('Database connection error. Please try again later.');
+            }
 
             if (!$isFirebase) {
                 // Standard OTP flow
@@ -259,20 +316,56 @@ class AuthByMobilePhone extends CoreService
                 $data->delete();
                 
                 // Find or create user
-                $user = $this->model()->where('phone', $data->phone)->first();
-                \Log::debug('User lookup result', ['phone' => $data->phone, 'user_found' => (bool)$user]);
+                try {
+                    $user = $this->model()->where('phone', $data->phone)->first();
+                    \Log::debug('User lookup result', [
+                        'phone' => $data->phone, 
+                        'user_found' => (bool)$user,
+                        'user_id' => $user->id ?? null
+                    ]);
+                } catch (\Exception $e) {
+                    \Log::error('Error looking up user', [
+                        'phone' => $data->phone,
+                        'error' => $e->getMessage(),
+                        'trace' => $e->getTraceAsString()
+                    ]);
+                    throw new \Exception('Error verifying your account. Please try again.');
+                }
                 
                 if (!$user) {
                     // Create new user with minimal required fields
-                    $user = $this->model()->create([
-                        'firstname'  => $data->phone, // Default to phone as firstname
-                        'phone'      => $data->phone,
-                        'ip_address' => request()->ip(),
-                        'auth_type'  => 'phone',
-                        'active'     => true,
-                        'phone_verified_at' => now(),
-                    ]);
-                    \Log::info('New user created during OTP verification', ['user_id' => $user->id]);
+                    try {
+                        $userData = [
+                            'firstname'  => $data->phone, // Default to phone as firstname
+                            'phone'      => $data->phone,
+                            'ip_address' => request()->ip(),
+                            'auth_type'  => 'phone',
+                            'active'     => true,
+                            'phone_verified_at' => now(),
+                        ];
+                        
+                        \Log::debug('Creating new user with data', $userData);
+                        
+                        $user = new $this->model();
+                        $user->fill($userData);
+                        
+                        if (!$user->save()) {
+                            throw new \Exception('Failed to save user model');
+                        }
+                        
+                        \Log::info('New user created during OTP verification', [
+                            'user_id' => $user->id,
+                            'phone' => $user->phone
+                        ]);
+                        
+                    } catch (\Exception $e) {
+                        \Log::error('Error creating user in confirmOPTCode', [
+                            'phone' => $data->phone,
+                            'error' => $e->getMessage(),
+                            'trace' => $e->getTraceAsString()
+                        ]);
+                        throw new \Exception('Failed to create user account. Please try again.');
+                    }
                 }
                 
             } else {
@@ -286,25 +379,63 @@ class AuthByMobilePhone extends CoreService
                 }
                 
                 // Find or create user
-                $user = $this->model()->where('phone', $phone)->first();
-                \Log::debug('Firebase user lookup', ['phone' => $phone, 'user_found' => (bool)$user]);
+                try {
+                    $user = $this->model()->where('phone', $phone)->first();
+                    \Log::debug('Firebase user lookup', [
+                        'phone' => $phone, 
+                        'user_found' => (bool)$user,
+                        'user_id' => $user->id ?? null
+                    ]);
+                } catch (\Exception $e) {
+                    \Log::error('Error in Firebase user lookup', [
+                        'phone' => $phone,
+                        'error' => $e->getMessage(),
+                        'trace' => $e->getTraceAsString()
+                    ]);
+                    throw new \Exception('Error verifying your account. Please try again.');
+                }
                 
                 if (!$user) {
                     // Create new user with provided data
-                    $userData = [
-                        'firstname'  => data_get($array, 'firstname', $phone),
-                        'lastname'   => data_get($array, 'lastname', ''),
-                        'email'      => data_get($array, 'email'),
-                        'phone'      => $phone,
-                        'password'   => bcrypt(data_get($array, 'password', Str::random(10))),
-                        'ip_address' => request()->ip(),
-                        'auth_type'  => 'firebase',
-                        'active'     => true,
-                        'phone_verified_at' => now(),
-                    ];
-                    
-                    $user = $this->model()->create($userData);
-                    \Log::info('New user created during Firebase OTP verification', ['user_id' => $user->id]);
+                    try {
+                        $userData = [
+                            'firstname'  => data_get($array, 'firstname', $phone),
+                            'lastname'   => data_get($array, 'lastname', ''),
+                            'email'      => data_get($array, 'email'),
+                            'phone'      => $phone,
+                            'password'   => bcrypt(data_get($array, 'password', Str::random(10))),
+                            'ip_address' => request()->ip(),
+                            'auth_type'  => 'firebase',
+                            'active'     => true,
+                            'phone_verified_at' => now(),
+                        ];
+                        
+                        \Log::debug('Creating new Firebase user with data', [
+                            'phone' => $phone,
+                            'has_email' => !empty(data_get($array, 'email')),
+                            'has_password' => !empty(data_get($array, 'password'))
+                        ]);
+                        
+                        $user = new $this->model();
+                        $user->fill($userData);
+                        
+                        if (!$user->save()) {
+                            throw new \Exception('Failed to save Firebase user model');
+                        }
+                        
+                        \Log::info('New user created during Firebase OTP verification', [
+                            'user_id' => $user->id,
+                            'phone' => $user->phone
+                        ]);
+                        
+                    } catch (\Exception $e) {
+                        \Log::error('Error creating Firebase user', [
+                            'phone' => $phone,
+                            'error' => $e->getMessage(),
+                            'trace' => $e->getTraceAsString()
+                        ]);
+                        throw new \Exception('Failed to create your account. Please try again.');
+                    }
                 }
                 
                 // Clean up any existing verification codes
