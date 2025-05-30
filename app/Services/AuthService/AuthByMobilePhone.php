@@ -42,7 +42,8 @@ class AuthByMobilePhone extends CoreService
             'phone' => data_get($array, 'phone'),
             'ip' => request()->ip(),
             'user_agent' => request()->userAgent(),
-            'request_data' => array_merge($array, ['phone' => '***'])
+            'request_data' => array_merge($array, ['phone' => '***']),
+            'timestamp' => now()->toDateTimeString()
         ];
         
         try {
@@ -67,486 +68,165 @@ class AuthByMobilePhone extends CoreService
             } catch (\Exception $e) {
                 $logContext['db_error'] = $e->getMessage();
                 \Log::error('Database connection failed', $logContext);
+                throw new \Exception('Database connection error. Please try again.');
             }
             
-            // Check if user exists
-            $user = $this->model()->withTrashed()->where('phone', $phone)->first();
-            $logContext['user_found'] = (bool)$user;
-            $logContext['user_id'] = $user ? $user->id : null;
-            $logContext['user_active'] = $user ? $user->active : null;
-            $logContext['user_deleted'] = $user ? $user->trashed() : null;
+            // Use a transaction with retry logic
+            $maxAttempts = 3;
+            $attempt = 0;
+            $user = null;
             
-            \Log::debug('User lookup result', $logContext);
-            
-            if ($user) {
-                // Update existing user
-                $updateData = [
-                    'phone'         => $phone,
-                    'ip_address'    => request()->ip(),
-                    'auth_type'     => "phone"
-                ];
+            while ($attempt < $maxAttempts) {
+                $attempt++;
+                $logContext['attempt'] = "$attempt/$maxAttempts";
                 
-                // Only update firstname if it doesn't already exist
-                if (empty($user->firstname)) {
-                    $updateData['firstname'] = $phone;
-                }
-                
-                $user->update($updateData);
-                \Log::debug('Updated existing user', ['user_id' => $user->id]);
+                DB::beginTransaction();
                 
                 try {
-                    // Check if user has any role, if not assign 'user' role
-                    $roles = Role::pluck('name')->toArray();
-                    \Log::debug('Available roles', ['roles' => $roles]);
+                    // Check if user exists with lock to prevent race conditions
+                    $user = $this->model()->withTrashed()
+                        ->where('phone', $phone)
+                        ->lockForUpdate()
+                        ->first();
                     
-                    if (empty($roles)) {
-                        throw new \Exception('No roles found in the database');
-                    }
+                    $logContext['user_found'] = (bool)$user;
+                    $logContext['user_id'] = $user ? $user->id : null;
+                    $logContext['user_active'] = $user ? $user->active : null;
+                    $logContext['user_deleted'] = $user ? $user->trashed() : null;
                     
-                    if (!$user->hasAnyRole($roles)) {
-                        $this->assignUserRole($user);
-                    }
-                } catch (\Exception $e) {
-                    \Log::error('Error in role assignment: ' . $e->getMessage(), [
-                        'user_id' => $user->id,
-                        'trace' => $e->getTraceAsString()
-                    ]);
-                    $this->assignUserRole($user);
-                }
-            } else {
-                // Create new user with default 'user' role
-                $userData = [
-                    'firstname'     => $phone,
-                    'phone'         => $phone,
-                    'ip_address'    => request()->ip(),
-                    'auth_type'     => "phone",
-                    'active'        => true,
-                    'phone_verified_at' => now()
-                ];
-                
-                try {
-                    // Log the attempt to create a new user
-                    \Log::info('Attempting to create new user', [
-                        'phone' => $phone,
-                        'data' => array_merge($userData, ['password' => '***'])
-                    ]);
+                    \Log::debug('User lookup in transaction', $logContext);
                     
-                    // Try to create the user with detailed error handling
-                    try {
-                        // First, check if user with this phone already exists (race condition check)
-                        $existingUser = $this->model()->withTrashed()->where('phone', $phone)->first();
-                        
-                        // Log database state for debugging
-                        $dbState = [
-                            'table' => 'users',
-                            'count' => $this->model()->count(),
-                            'count_with_phone' => $this->model()->where('phone', $phone)->count(),
-                            'count_trashed' => $this->model()->onlyTrashed()->count(),
-                        ];
-                        \Log::debug('Database state before user creation', $dbState);
-                        
-                        if ($existingUser) {
-                            // If user was soft-deleted, restore them
-                            if ($existingUser->trashed()) {
-                                $existingUser->restore();
-                                $existingUser->update([
-                                    'active' => true,
-                                    'phone_verified_at' => now()
-                                ]);
-                                \Log::info('Restored soft-deleted user', [
-                                    'user_id' => $existingUser->id,
-                                    'phone' => $phone,
-                                    'was_soft_deleted' => true
-                                ]);
-                            } else {
-                                \Log::warning('User with this phone number already exists', [
-                                    'phone' => $phone,
-                                    'user_id' => $existingUser->id,
-                                    'active' => $existingUser->active,
-                                    'phone_verified_at' => $existingUser->phone_verified_at
-                                ]);
-                            }
-                            
-                            // Update user with latest data
-                            $existingUser->update([
+                    if ($user) {
+                        // Handle existing user (including soft-deleted ones)
+                        if ($user->trashed()) {
+                            $user->restore();
+                            $user->update([
+                                'active' => true,
+                                'phone_verified_at' => $user->phone_verified_at ?? now(),
                                 'ip_address' => request()->ip(),
                                 'auth_type' => 'phone',
-                                'active' => true,
-                                'phone_verified_at' => $existingUser->phone_verified_at ?? now()
+                                'deleted_at' => null
                             ]);
-                            
-                            $user = $existingUser;
-                            
-                            // Ensure user has a role
-                            $this->ensureUserHasRole($user);
-                            
-                            return $this->proceedWithSmsVerification($user, $phone);
-                        }
-                        
-                        // If we get here, it's a new user
-                        $logData = array_merge($userData, [
-                            'password' => '***',
-                            'ip_address' => request()->ip(),
-                            'created_at' => now()->toDateTimeString(),
-                            'updated_at' => now()->toDateTimeString()
-                        ]);
-                        
-                        \Log::info('Attempting to create new user', [
-                            'phone' => $phone,
-                            'data' => $logData
-                        ]);
-                        
-                        try {
-                            // Try direct DB insert first to avoid model events that might be interfering
-                            $userId = \DB::table('users')->insertGetId($userData);
-                            $user = $this->model()->find($userId);
-                            \Log::info('User created via direct DB insert', [
-                                'user_id' => $userId,
+                            \Log::info('Restored soft-deleted user', [
+                                'user_id' => $user->id,
                                 'phone' => $phone
                             ]);
-                            $saved = true;
-                        } catch (\Exception $dbEx) {
-                            // If direct insert fails, fall back to model creation
-                            \Log::warning('Direct DB insert failed, falling back to model creation', [
-                                'error' => $dbEx->getMessage(),
-                                'trace' => $dbEx->getTraceAsString()
-                            ]);
+                        } else {
+                            // Update existing active user
+                            $updateData = [
+                                'ip_address' => request()->ip(),
+                                'auth_type' => 'phone',
+                                'active' => true
+                            ];
                             
-                            $user = new $this->model();
-                            $logContext['user_model'] = get_class($user);
-                            
-                            // Log before filling
-                            \Log::debug('Filling user model with data', array_merge($logContext, [
-                                'user_data' => $logData
-                            ]));
-                            
-                            $user->fill($userData);
-                            
-                            // Log after filling
-                            \Log::debug('User model filled', array_merge($logContext, [
-                                'user_attributes' => $user->getAttributes(),
-                                'original' => $user->getOriginal(),
-                                'changes' => $user->getChanges()
-                            ]));
-                            
-                            // Save and check for errors
-                            \Log::debug('Attempting to save user', $logContext);
-                            $saved = $user->save();
-                        }
-                        
-                        if (!$saved) {
-                            $errors = method_exists($user, 'getErrors') ? $user->getErrors() : 'Unknown error';
-                            $errorMessage = is_array($errors) ? json_encode($errors) : (string) $errors;
-                            
-                            \Log::error('Failed to save user model', [
-                                'phone' => $phone,
-                                'errors' => $errorMessage,
-                                'user_data' => $userData,
-                                'trace' => debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 5)
-                            ]);
-                            
-                            // Try to find the user again in case of race condition
-                            $existingUser = $this->model()->withTrashed()->where('phone', $phone)->first();
-                            if ($existingUser) {
-                                \Log::info('Found user after race condition', [
-                                    'phone' => $phone,
-                                    'user_id' => $existingUser->id,
-                                    'was_soft_deleted' => $existingUser->trashed()
-                                ]);
-                                
-                                if ($existingUser->trashed()) {
-                                    $existingUser->restore();
-                                }
-                                
-                                $existingUser->update([
-                                    'active' => true,
-                                    'phone_verified_at' => $existingUser->phone_verified_at ?? now()
-                                ]);
-                                
-                                $this->ensureUserHasRole($existingUser);
-                                return $this->proceedWithSmsVerification($existingUser, $phone);
+                            // Only update firstname if it doesn't already exist
+                            if (empty($user->firstname)) {
+                                $updateData['firstname'] = $phone;
                             }
                             
-                            throw new \Exception('Failed to save user: ' . $errorMessage);
-                        }
-                        
-                        // Verify the user was saved
-                        if (!$user->exists || !$user->id) {
-                            $errorMsg = 'User model was not saved correctly. ';
-                            $errorMsg .= 'Exists: ' . ($user->exists ? 'Yes' : 'No') . ', ';
-                            $errorMsg .= 'ID: ' . ($user->id ?? 'null');
-                            
-                            \Log::error($errorMsg, array_merge($logContext, [
-                                'user_exists' => $user->exists,
-                                'user_id' => $user->id,
-                                'user_attributes' => $user->getAttributes(),
-                                'original' => $user->getOriginal(),
-                                'changes' => $user->getChanges()
-                            ]));
-                            
-                            throw new \Exception($errorMsg);
+                            $user->update($updateData);
+                            \Log::debug('Updated existing user', ['user_id' => $user->id]);
                         }
                         
                         // Ensure user has a role
                         $this->ensureUserHasRole($user);
                         
-                        \Log::info('User created successfully', [
+                    } else {
+                        // Create new user
+                        $userData = [
+                            'firstname' => $phone,
+                            'phone' => $phone,
+                            'ip_address' => request()->ip(),
+                            'auth_type' => 'phone',
+                            'active' => true,
+                            'phone_verified_at' => now(),
+                            'created_at' => now(),
+                            'updated_at' => now()
+                        ];
+                        
+                        // Log the attempt to create a new user
+                        \Log::info('Creating new user in transaction', [
+                            'phone' => $phone,
+                            'attempt' => $attempt
+                        ]);
+                        
+                        // Create user directly in the database to avoid model events
+                        $userId = DB::table('users')->insertGetId($userData);
+                        $user = $this->model()->findOrFail($userId);
+                        \Log::info('New user created', [
                             'user_id' => $user->id,
-                            'phone' => $user->phone,
-                            'created_at' => $user->created_at
+                            'phone' => $phone
                         ]);
                         
-                    } catch (\Exception $createEx) {
-                        // Log detailed error information
-                        $errorMessage = $createEx->getMessage();
-                        $errorInfo = array_merge($logContext, [
-                            'error' => $errorMessage,
-                            'data' => $userData,
-                            'trace' => $createEx->getTraceAsString(),
-                            'db_error' => $createEx instanceof \PDOException ? $createEx->getMessage() : 'Not a database error',
-                            'exception_class' => get_class($createEx),
-                            'execution_time' => round(microtime(true) - $startTime, 3) . 's',
-                            'memory_usage' => round(memory_get_usage() / 1024 / 1024, 2) . 'MB'
-                        ]);
-                        
-                        // Add database query log if available
-                        if (config('app.debug')) {
-                            $errorInfo['queries'] = \DB::getQueryLog();
-                        }
-                        
-                        // Check for database errors
-                        if ($createEx->getPrevious() instanceof \PDOException) {
-                            $pdoEx = $createEx->getPrevious();
-                            $errorInfo['pdo_error'] = [
-                                'code' => $pdoEx->getCode(),
-                                'message' => $pdoEx->getMessage(),
-                                'sql_state' => $pdoEx->errorInfo[0] ?? null,
-                                'driver_code' => $pdoEx->errorInfo[1] ?? null,
-                                'driver_message' => $pdoEx->errorInfo[2] ?? null,
-                            ];
-                            
-                            // Check for duplicate entry error
-                            if ($pdoEx->getCode() == '23000' || str_contains(strtolower($pdoEx->getMessage()), 'duplicate entry')) {
-                                // Try to get the existing user
-                                $existingUser = $this->model()->withTrashed()->where('phone', $phone)->first();
-                                if ($existingUser) {
-                                    \Log::info('Found existing user after duplicate error', [
-                                        'phone' => $phone,
-                                        'user_id' => $existingUser->id,
-                                        'was_soft_deleted' => $existingUser->trashed()
-                                    ]);
-                                    
-                                    if ($existingUser->trashed()) {
-                                        $existingUser->restore();
-                                    }
-                                    
-                                    $existingUser->update([
-                                        'active' => true,
-                                        'phone_verified_at' => $existingUser->phone_verified_at ?? now()
-                                    ]);
-                                    
-                                    $this->ensureUserHasRole($existingUser);
-                                    return $this->proceedWithSmsVerification($existingUser, $phone);
-                                }
-                            }
-                        }
-                        
-                        \Log::error('Detailed user creation error', $errorInfo);
-                        
-                        // One final attempt to find the user
-                        $existingUser = $this->model()->withTrashed()->where('phone', $phone)->first();
-                        if ($existingUser) {
-                            \Log::info('Found user in final recovery attempt', [
-                                'phone' => $phone,
-                                'user_id' => $existingUser->id,
-                                'was_soft_deleted' => $existingUser->trashed()
-                            ]);
-                            
-                            if ($existingUser->trashed()) {
-                                $existingUser->restore();
-                            }
-                            
-                            $this->ensureUserHasRole($existingUser);
-                            return $this->proceedWithSmsVerification($existingUser, $phone);
-                        }
-                        
-                        // If we get here, we couldn't recover the user
-                        throw new \Exception('Failed to create user. Please try again or contact support if the problem persists.');
-                    }
-                    
-                    // Verify the user was actually saved
-                    if (!$user->exists) {
-                        throw new \Exception('User model exists() returned false after creation');
-                    }
-                    
-                    // Refresh the model to ensure we have all database defaults
-                    $user->refresh();
-                    
-                    \Log::info('Successfully created new user', [
-                        'user_id' => $user->id,
-                        'phone' => $user->phone,
-                        'created_at' => $user->created_at
-                    ]);
-                    
-                    try {
-                        // Assign default 'user' role
+                        // Assign default role
                         $this->assignUserRole($user);
-                    } catch (\Exception $roleException) {
-                        // Log but don't fail the entire registration if role assignment fails
-                        \Log::error('Role assignment failed after user creation', [
-                            'user_id' => $user->id,
-                            'error' => $roleException->getMessage(),
-                            'trace' => $roleException->getTraceAsString()
-                        ]);
                     }
                     
-                    // Return success response with user data
-                    return $this->successResponse(__('User successfully created', [], $this->language), [
-                        'user' => $user,
-                        'status' => true
+                    // If we get here, everything worked - commit the transaction
+                    DB::commit();
+                    \Log::debug('Transaction committed successfully', [
+                        'user_id' => $user->id,
+                        'attempt' => $attempt
                     ]);
+                    
+                    // Break out of the retry loop on success
+                    break;
                     
                 } catch (\Exception $e) {
-                    // Log detailed error information
-                    $errorContext = [
-                        'phone' => $phone,
-                        'error' => $e->getMessage(),
-                        'exception' => get_class($e),
-                        'trace' => $e->getTraceAsString(),
-                        'user_data' => $userData
-                    ];
-                    
-                    // Check database connection
-                    try {
-                        $errorContext['db_connection'] = \DB::connection()->getPdo() ? 'Connected' : 'Not connected';
-                    } catch (\Exception $dbEx) {
-                        $errorContext['db_connection'] = 'Connection failed: ' . $dbEx->getMessage();
+                    // Always roll back the transaction on error
+                    if (DB::transactionLevel() > 0) {
+                        DB::rollBack();
                     }
                     
-                    \Log::error('User creation failed', $errorContext);
+                    // Log the error
+                    $errorContext = array_merge($logContext, [
+                        'error' => $e->getMessage(),
+                        'exception' => get_class($e),
+                        'trace' => $e->getTraceAsString()
+                    ]);
                     
-                    // Re-throw with more context but without exposing sensitive data
-                    throw new \Exception('Failed to create user. Please try again or contact support if the problem persists.');
+                    // If it's not a duplicate entry error, re-throw
+                    if (!str_contains($e->getMessage(), '1062 Duplicate entry') && 
+                        !str_contains($e->getMessage(), 'Integrity constraint violation')) {
+                        \Log::error('Fatal error in user authentication', $errorContext);
+                        throw $e;
+                    }
+                    
+                    // If we've reached max attempts, throw the exception
+                    if ($attempt >= $maxAttempts) {
+                        \Log::error('Max retry attempts reached', $errorContext);
+                        throw new \Exception('Failed to process your request after multiple attempts. Please try again.');
+                    }
+                    
+                    // Wait a bit before retrying (exponential backoff)
+                    $sleepTime = 100000 * $attempt; // 100ms, 200ms, 300ms
+                    usleep($sleepTime);
+                    
+                    \Log::warning('Retrying after error', [
+                        'attempt' => $attempt,
+                        'sleep_ms' => $sleepTime / 1000,
+                        'error' => $e->getMessage()
+                    ]);
                 }
             }
             
             if (!$user) {
-                \Log::error('Failed to create or update user', [
-                    'phone' => $phone,
-                    'trace' => debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 5)
-                ]);
-                
-                // Check if user exists but couldn't be retrieved
-                $existingUser = $this->model()->withTrashed()->where('phone', $phone)->first();
-                if ($existingUser) {
-                    \Log::warning('Found existing user after creation failure', [
-                        'phone' => $phone,
-                        'user_id' => $existingUser->id,
-                        'deleted_at' => $existingUser->deleted_at
-                    ]);
-                    
-                    // If user was soft-deleted, restore them
-                    if ($existingUser->trashed()) {
-                        $existingUser->restore();
-                        \Log::info('Restored soft-deleted user', [
-                            'user_id' => $existingUser->id,
-                            'phone' => $phone
-                        ]);
-                    }
-                    
-                    $user = $existingUser;
-                } else {
-                    throw new \Exception('Failed to create or update user. Please try again later.');
-                }
+                throw new \Exception('Failed to create or retrieve user after ' . $maxAttempts . ' attempts');
             }
             
-            // Log successful authentication
-            $logContext['execution_time'] = round(microtime(true) - $startTime, 3) . 's';
-            $logContext['memory_usage'] = round(memory_get_usage() / 1024 / 1024, 2) . 'MB';
-            \Log::info('Authentication successful, proceeding with SMS verification', $logContext);
-            
-            // Start transaction for user creation and SMS sending
-            DB::beginTransaction();
-            
-            try {
-                // Double-check if user exists in a transaction-safe way
-                $existingUser = $this->model()->withTrashed()->where('phone', $phone)->lockForUpdate()->first();
-                
-                if ($existingUser) {
-                    // If user was soft-deleted, restore them
-                    if ($existingUser->trashed()) {
-                        $existingUser->restore();
-                        $existingUser->update([
-                            'active' => true,
-                            'phone_verified_at' => $existingUser->phone_verified_at ?? now(),
-                            'ip_address' => request()->ip()
-                        ]);
-                        \Log::info('Restored soft-deleted user in transaction', [
-                            'user_id' => $existingUser->id,
-                            'phone' => $phone
-                        ]);
-                    }
-                    $user = $existingUser;
-                } else {
-                    // Create new user within transaction
-                    $user = $this->model()->create([
-                        'firstname' => $phone,
-                        'phone' => $phone,
-                        'ip_address' => request()->ip(),
-                        'auth_type' => 'phone',
-                        'active' => true,
-                        'phone_verified_at' => now(),
-                        'created_at' => now(),
-                        'updated_at' => now()
-                    ]);
-                    \Log::info('Created new user in transaction', ['user_id' => $user->id, 'phone' => $phone]);
-                }
-                
-                // Ensure user has a role
-                $this->ensureUserHasRole($user);
-                
-                // Commit the transaction
-                DB::commit();
-                \Log::debug('Transaction committed successfully', ['user_id' => $user->id]);
-                
-                // Proceed with SMS verification
-                return $this->proceedWithSmsVerification($user, $phone);
-                
-            } catch (\Exception $e) {
-                DB::rollBack();
-                \Log::error('User creation transaction failed', [
-                    'phone' => $phone,
-                    'error' => $e->getMessage(),
-                    'trace' => $e->getTraceAsString()
-                ]);
-                
-                // If it's a duplicate entry error, try to recover
-                if (str_contains($e->getMessage(), '1062 Duplicate entry') || 
-                    str_contains($e->getMessage(), 'Integrity constraint violation')) {
-                    $existingUser = $this->model()->withTrashed()->where('phone', $phone)->first();
-                    if ($existingUser) {
-                        if ($existingUser->trashed()) {
-                            $existingUser->restore();
-                        }
-                        $this->ensureUserHasRole($existingUser);
-                        return $this->proceedWithSmsVerification($existingUser, $phone);
-                    }
-                }
-                
-                throw $e;
-            }
-            
+            // Proceed with SMS verification
+            return $this->proceedWithSmsVerification($user, $phone);
         } catch (\Exception $e) {
+            // Log the error with detailed context
             $errorContext = array_merge($logContext, [
                 'error' => $e->getMessage(),
                 'exception' => get_class($e),
                 'trace' => $e->getTraceAsString(),
                 'execution_time' => round(microtime(true) - $startTime, 3) . 's',
                 'memory_usage' => round(memory_get_usage() / 1024 / 1024, 2) . 'MB',
-                'line' => $e->getLine(),
-                'file' => $e->getFile()
+                'timestamp' => now()->toDateTimeString()
             ]);
-            
+
             // Add database error details if available
             if ($e->getPrevious() instanceof \PDOException) {
                 $pdoEx = $e->getPrevious();
@@ -558,14 +238,87 @@ class AuthByMobilePhone extends CoreService
                     'driver_message' => $pdoEx->errorInfo[2] ?? null,
                 ];
             }
-            
-            \Log::error('Authentication Error', $errorContext);
-            
+
+            \Log::error('Authentication failed', $errorContext);
+
+            // Return a user-friendly error message
             return $this->onErrorResponse([
-                'code'    => ResponseError::ERROR_400,
-                'message' => $e->getMessage(),
-                'trace' => config('app.debug') ? $e->getTraceAsString() : null
+                'code' => ResponseError::ERROR_400,
+                'message' => 'Failed to process your request. Please try again.'
             ]);
+        }
+            // Firebase OTP flow
+            $phone = data_get($array, 'phone');
+            if (empty($phone)) {
+                return $this->onErrorResponse([
+                    'code'    => ResponseError::ERROR_400,
+                    'message' => 'Phone number is required'
+                ]);
+            }
+            
+            // Find or create user
+            try {
+                $user = $this->model()->where('phone', $phone)->first();
+                \Log::debug('Firebase user lookup', [
+                    'phone' => $phone, 
+                    'user_found' => (bool)$user,
+                    'user_id' => $user->id ?? null
+                ]);
+            } catch (\Exception $e) {
+                \Log::error('Error in Firebase user lookup', [
+                    'phone' => $phone,
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString()
+                ]);
+                throw new \Exception('Error verifying your account. Please try again.');
+            }
+            
+            if (!$user) {
+                // Create new user with provided data
+                try {
+                    $userData = [
+                        'firstname'  => data_get($array, 'firstname', $phone),
+                        'lastname'   => data_get($array, 'lastname', ''),
+                        'email'      => data_get($array, 'email'),
+                        'phone'      => $phone,
+                        'password'   => bcrypt(data_get($array, 'password', Str::random(10))),
+                        'ip_address' => request()->ip(),
+                        'auth_type'  => 'firebase',
+                        'active'     => true,
+                        'phone_verified_at' => now(),
+                    ];
+                    
+                    \Log::debug('Creating new Firebase user with data', [
+                        'phone' => $phone,
+                        'has_email' => !empty(data_get($array, 'email')),
+                        'has_password' => !empty(data_get($array, 'password'))
+                    ]);
+                    
+                    $user = new $this->model();
+                    $user->fill($userData);
+                    
+                    if (!$user->save()) {
+                        throw new \Exception('Failed to save user model');
+                    }
+                    
+                    \Log::info('New Firebase user created during OTP verification', [
+                        'user_id' => $user->id,
+                        'phone' => $user->phone
+                    ]);
+                    
+                } catch (\Exception $e) {
+                    \Log::error('Error creating Firebase user in confirmOPTCode', [
+                        'phone' => $phone,
+                        'error' => $e->getMessage(),
+                        'trace' => $e->getTraceAsString()
+                    ]);
+                    throw new \Exception('Failed to create Firebase user account. Please try again.');
+                }
+            }
+            
+        }
+        
+        // This code block has been cleaned up and moved to the main authentication flow
         }
     }
 
