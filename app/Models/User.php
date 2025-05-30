@@ -225,7 +225,7 @@ class User extends Authenticatable implements MustVerifyEmail
             
             // Log the raw token data for debugging
             $tokenType = gettype($tokens);
-            \Log::debug('Getting FCM tokens for user', [
+            $logContext = [
                 'user_id' => $this->id,
                 'raw_token_type' => $tokenType,
                 'is_null' => is_null($tokens),
@@ -234,12 +234,22 @@ class User extends Authenticatable implements MustVerifyEmail
                 'is_object' => is_object($tokens),
                 'token_sample' => is_string($tokens) ? 
                     (strlen($tokens) > 20 ? substr($tokens, 0, 20) . '...' : $tokens) : 
-                    (is_array($tokens) ? json_encode(array_slice($tokens, 0, 3)) : 'N/A')
-            ]);
+                    (is_array($tokens) && !empty($tokens) ? 
+                        json_encode(array_slice((array)$tokens, 0, min(3, count((array)$tokens)))) : 
+                        'N/A'),
+                'caller' => debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 3)[2]['function'] ?? 'unknown',
+                'trace' => array_slice(debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 5), 1, 3)
+            ];
+            
+            \Log::debug('Getting FCM tokens for user', $logContext);
             
             // If tokens are null or empty, return empty array
             if (empty($tokens)) {
-                \Log::debug('No FCM tokens found for user', ['user_id' => $this->id]);
+                \Log::debug('No FCM tokens found for user', [
+                    'user_id' => $this->id,
+                    'firebase_token' => $this->firebase_token,
+                    'firebase_token_type' => gettype($this->firebase_token)
+                ]);
                 return [];
             }
             

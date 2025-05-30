@@ -49,32 +49,52 @@ class BroadcastService extends CoreService
 
         $query = User::query();
 
-        // Build the query to include users with specific roles and/or regular users
-        $query->where(function($q) use ($roleGroups, $groups) {
-            // Include users with specific roles if any role groups are specified
-            if (!empty($roleGroups)) {
-                $q->whereHas('roles', function($roleQuery) use ($roleGroups) {
-                    $roleQuery->whereIn('name', $roleGroups);
-                });
-            }
-            
-            // Include users without any roles when 'user' is in groups
-            if (in_array('user', $groups)) {
-                if (!empty($roleGroups)) {
-                    $q->orWhereDoesntHave('roles');
-                } else {
-                    $q->whereDoesntHave('roles');
-                }
-            }
-        });
-        
-        // Log the query for debugging
-        \Log::debug('Broadcast user query', [
-            'sql' => $query->toSql(),
-            'bindings' => $query->getBindings(),
+        // Log the initial request
+        \Log::debug('Starting broadcast with parameters', [
+            'groups' => $groups,
+            'channels' => $channels,
             'role_groups' => $roleGroups,
-            'all_groups' => $groups
+            'custom_emails_count' => count($customEmails)
         ]);
+
+        // Get all users if 'all' is in groups
+        if (in_array('all', $groups)) {
+            \Log::debug('Broadcasting to all users');
+            // No additional where clauses needed, we want all users
+        } 
+        // Handle role-based filtering
+        else if (!empty($roleGroups) || in_array('user', $groups)) {
+            $query->where(function($q) use ($roleGroups, $groups) {
+                // Include users with specific roles if any role groups are specified
+                if (!empty($roleGroups)) {
+                    $q->whereHas('roles', function($roleQuery) use ($roleGroups) {
+                        $roleQuery->whereIn('name', $roleGroups);
+                    });
+                }
+                
+                // Include users without any roles when 'user' is in groups
+                if (in_array('user', $groups)) {
+                    if (!empty($roleGroups)) {
+                        $q->orWhereDoesntHave('roles');
+                    } else {
+                        $q->whereDoesntHave('roles');
+                    }
+                }
+            });
+            
+            // Log the query for debugging
+            \Log::debug('Broadcast user query', [
+                'sql' => $query->toSql(),
+                'bindings' => $query->getBindings(),
+                'role_groups' => $roleGroups,
+                'all_groups' => $groups
+            ]);
+        } else {
+            \Log::warning('No valid user groups specified for broadcast', [
+                'groups' => $groups,
+                'role_groups' => $roleGroups
+            ]);
+        }
 
         $stats = [
             'emailed' => 0,
@@ -84,21 +104,44 @@ class BroadcastService extends CoreService
         ];
 
         $query->chunkById(500, function ($users) use ($payload, $channels, &$stats, $customEmails) {
+            \Log::debug('Processing chunk of users', [
+                'total_users' => $users->count(),
+                'channels' => $channels
+            ]);
+            
             if (in_array('push', $channels)) {
                 $tokens = [];
                 $userIds = [];
+                $usersWithTokens = 0;
+                $totalTokens = 0;
                 
                 foreach ($users as $user) {
-                    // Use the getFcmTokens() method which handles all token formats and validation
+                    // Log each user being processed
                     $userTokens = $user->getFcmTokens();
-                    if (!empty($userTokens)) {
+                    $tokenCount = count($userTokens);
+                    
+                    if ($tokenCount > 0) {
                         $userIds[] = $user->id;
                         $tokens = array_merge($tokens, $userTokens);
+                        $usersWithTokens++;
+                        $totalTokens += $tokenCount;
+                        
+                        \Log::debug('User has valid FCM tokens', [
+                            'user_id' => $user->id,
+                            'token_count' => $tokenCount,
+                            'first_token_prefix' => !empty($userTokens[0]) ? substr($userTokens[0], 0, 10) . '...' : 'none'
+                        ]);
+                    } else {
+                        \Log::debug('User has no valid FCM tokens', [
+                            'user_id' => $user->id,
+                            'firebase_token' => !empty($user->firebase_token) ? 'exists' : 'none',
+                            'firebase_token_type' => $user->firebase_token ? gettype($user->firebase_token) : 'null'
+                        ]);
                     }
                 }
                 
                 if (!empty($tokens)) {
-                    $this->sendNotification(
+                    $notificationResult = $this->sendNotification(
                         $tokens,
                         $payload['body'], // message
                         $payload['title'],
@@ -109,18 +152,25 @@ class BroadcastService extends CoreService
                         ] + $payload,
                         $userIds,
                     );
+                    
                     $stats['pushed'] += count($tokens);
                     
                     \Log::info('Sent push notifications to users', [
                         'user_count' => count($userIds),
                         'token_count' => count($tokens),
-                        'title' => $payload['title']
+                        'title' => $payload['title'],
+                        'notification_result' => $notificationResult['status'] ?? 'unknown',
+                        'users_with_tokens' => $usersWithTokens,
+                        'total_users_processed' => $users->count()
                     ]);
                 } else {
                     \Log::warning('No valid FCM tokens found for any users in chunk', [
-                        'user_count' => $users->count()
+                        'total_users' => $users->count(),
+                        'users_with_tokens' => $usersWithTokens,
+                        'total_tokens_found' => $totalTokens
                     ]);
                 }
+            }
             }
 
             if (in_array('email', $channels)) {
