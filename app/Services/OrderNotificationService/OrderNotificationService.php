@@ -186,32 +186,71 @@ class OrderNotificationService
     /**
      * Send notification to a specific user with proper token handling
      */
+    /**
+     * Send notification to a specific user with proper token handling
+     * 
+     * @param \App\Models\User $user
+     * @param string $title
+     * @param string $message
+     * @param array $data
+     * @return bool
+     */
+    /**
+     * Send notification to a specific user with proper token handling
+     * 
+     * @param \App\Models\User $user
+     * @param string $title
+     * @param string $message
+     * @param array $data
+     * @return bool
+     */
     protected function sendToUser($user, $title, $message, $data = [])
     {
         try {
-            // Get user's FCM tokens using the getFcmTokens method
+            if (!$user) {
+                Log::warning('Cannot send notification: User is null');
+                return false;
+            }
+
+            $isTestEnv = app()->environment('local', 'staging', 'development');
+            
+            // Get user's FCM tokens
             $tokens = $user->getFcmTokens();
             
-            // If no tokens found, use a test token for the user in development/staging
-            if (empty($tokens) && app()->environment('local', 'staging', 'development')) {
-                $testToken = 'test_fcm_token_' . ($user->hasRole('admin') ? 'admin_' : 'user_') . $user->id;
-                Log::info('No FCM tokens found for user, using test token', [
-                    'user_id' => $user->id,
-                    'user_type' => $user->hasRole('admin') ? 'admin' : 'user',
-                    'test_token' => $testToken
-                ]);
-                $tokens = [$testToken];
+            Log::debug('FCM tokens for user', [
+                'user_id' => $user->id,
+                'tokens_count' => count($tokens),
+                'environment' => app()->environment(),
+                'is_test_env' => $isTestEnv
+            ]);
+            
+            // Handle test environment
+            if ($isTestEnv) {
+                // In test environment, we can use test tokens
+                if (empty($tokens)) {
+                    $testToken = 'test_fcm_token_' . ($user->hasRole('admin') ? 'admin_' : 'user_') . $user->id;
+                    Log::info('Using test FCM token in test environment', [
+                        'user_id' => $user->id,
+                        'test_token' => $testToken
+                    ]);
+                    $tokens = [$testToken];
+                }
+            } else {
+                // In production, filter out test tokens
+                $tokens = array_filter($tokens, function($token) {
+                    return !str_starts_with($token, 'test_fcm_token_');
+                });
+                
+                if (empty($tokens)) {
+                    Log::warning('No valid FCM tokens found for user in production', [
+                        'user_id' => $user->id,
+                        'environment' => app()->environment()
+                    ]);
+                    return false;
+                }
             }
             
-            if (empty($tokens)) {
-                Log::warning('No FCM tokens found for user', [
-                    'user_id' => $user->id,
-                    'user_type' => $user->hasRole('admin') ? 'admin' : 'user'
-                ]);
-                return;
-            }
-            
-            // Add common notification data
+            // Prepare notification data
             $notificationData = array_merge([
                 'click_action' => 'FLUTTER_NOTIFICATION_CLICK',
                 'notification_created_at' => now()->toDateTimeString(),
@@ -232,15 +271,31 @@ class OrderNotificationService
                 'token_sample' => !empty($tokens) ? substr(implode(',', $tokens), 0, 50) . '...' : 'none',
             ]);
             
-            // Send notification
-            $this->sendNotification(
-                $tokens,
-                $title,
-                $message,
-                $notificationData,
-                [$user->id],
-                $title // Use title as firebase_title
-            );
+            // Send notification using the notification service
+            try {
+                $this->notification->sendPushNotification(
+                    $tokens,
+                    $title,
+                    $message,
+                    $notificationData
+                );
+                
+                Log::info('Push notification sent successfully', [
+                    'user_id' => $user->id,
+                    'title' => $title,
+                    'message' => $message
+                ]);
+                
+                return true;
+            } catch (\Exception $e) {
+                Log::error('Failed to send push notification', [
+                    'user_id' => $user->id,
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString()
+                ]);
+                return false;
+            }
+            
             
         } catch (\Exception $e) {
             Log::error('Error in sendToUser: ' . $e->getMessage(), [
