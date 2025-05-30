@@ -124,190 +124,145 @@ class AuthByMobilePhone extends CoreService
      * @return JsonResponse
      * @todo REMOVE IN THE FUTURE
      */
+    /**
+     * @param array $array
+     * @return JsonResponse
+     */
     public function confirmOPTCode(array $array): JsonResponse
     {
+        \DB::beginTransaction();
+        
         try {
-            \Log::debug('Starting confirmOPTCode', ['input' => array_merge($array, ['verifyCode' => '***'])]);
-            
+            \Log::debug('Starting confirmOPTCode', [
+                'verifyId' => data_get($array, 'verifyId'),
+                'ip' => request()->ip(),
+                'user_agent' => request()->userAgent()
+            ]);
+
             $isFirebase = data_get($array, 'type') === 'firebase';
-            $data = [];
+            $data = null;
             $user = null;
             
             // Log database connection status
             try {
                 $dbConnected = \DB::connection()->getPdo() ? true : false;
                 \Log::debug('Database connection status', ['connected' => $dbConnected]);
+                
+                if (!$dbConnected) {
+                    throw new \Exception('Cannot connect to database');
+                }
             } catch (\Exception $e) {
-                \Log::error('Database connection error', ['error' => $e->getMessage()]);
+                \Log::error('Database connection error', [
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString()
+                ]);
                 throw new \Exception('Database connection error. Please try again later.');
             }
 
-            if (!$isFirebase) {
-                // Standard OTP flow
-                $data = SmsCode::where("verifyId", data_get($array, 'verifyId'))->first();
-                \Log::debug('SmsCode query result', ['found' => (bool)$data, 'verifyId' => data_get($array, 'verifyId')]);
-                
-                if (empty($data)) {
-                    \Log::error('SmsCode not found', ['verifyId' => data_get($array, 'verifyId')]);
-                    return $this->onErrorResponse([
-                        'code'    => ResponseError::ERROR_404,
-                        'message' => __('errors.' . ResponseError::ERROR_404, locale: $this->language)
-                    ]);
-                }
-                
-                if (Carbon::parse($data->expiredAt) < now()) {
-                    \Log::error('OTP code expired', [
-                        'expiredAt' => $data->expiredAt,
-                        'now' => now()
-                    ]);
-                    return $this->onErrorResponse([
-                        'code'    => ResponseError::ERROR_203,
-                        'message' => __('errors.' . ResponseError::ERROR_203, locale: $this->language)
-                    ]);
-                }
-                
-                if ($data->OTPCode != data_get($array, 'verifyCode')) {
-                    \Log::error('Invalid OTP code', [
-                        'expected' => $data->OTPCode,
-                        'received' => data_get($array, 'verifyCode')
-                    ]);
-                    return $this->onErrorResponse([
-                        'code'    => ResponseError::ERROR_201,
-                        'message' => __('errors.' . ResponseError::ERROR_201, locale: $this->language)
-                    ]);
-                }
-                
-                // Cleanup the used OTP
-                $data->delete();
-                
-                // Find or create user
-                try {
-                    $user = $this->model()->where('phone', $data->phone)->first();
-                    \Log::debug('User lookup result', [
-                        'phone' => $data->phone, 
-                        'user_found' => (bool)$user,
-                        'user_id' => $user->id ?? null
-                    ]);
-                    
-                    if (!$user) {
-                        // Create new user with minimal required fields
-                        $userData = [
-                            'firstname'  => $data->phone, // Default to phone as firstname
-                            'phone'      => $data->phone,
-                            'ip_address' => request()->ip(),
-                            'auth_type'  => 'phone',
-                            'active'     => true,
-                            'phone_verified_at' => now(),
-                        ];
-                        
-                        \Log::debug('Creating new user with data', $userData);
-                        
-                        $user = new $this->model();
-                        $user->fill($userData);
-                        
-                        if (!$user->save()) {
-                            throw new \Exception('Failed to save user model');
-                        }
-                        
-                        \Log::info('New user created during OTP verification', [
-                            'user_id' => $user->id,
-                            'phone' => $user->phone
-                        ]);
-                        
-                        // Assign default role
-                        $this->ensureUserHasRole($user);
-                    }
-                    
-                    // Use proceedWithSmsVerification to handle the response
-                    return $this->proceedWithSmsVerification($user, $data->phone);
-                    
-                } catch (\Exception $e) {
-                    \Log::error('Error in user creation/lookup', [
-                        'phone' => $data->phone,
-                        'error' => $e->getMessage(),
-                        'trace' => $e->getTraceAsString()
-                    ]);
-                    throw new \Exception('Error verifying your account. Please try again.');
-                }
-                
-            } else {
-                // Firebase OTP flow
-                $phone = data_get($array, 'phone');
-                if (empty($phone)) {
-                    return $this->onErrorResponse([
-                        'code'    => ResponseError::ERROR_400,
-                        'message' => 'Phone number is required'
-                    ]);
-                }
-                
-                // Find or create user
-                try {
-                    $user = $this->model()->where('phone', $phone)->first();
-                    \Log::debug('Firebase user lookup', [
-                        'phone' => $phone, 
-                        'user_found' => (bool)$user,
-                        'user_id' => $user->id ?? null
-                    ]);
-                    
-                    if (!$user) {
-                        // Create new user with provided data
-                        $userData = [
-                            'firstname'  => data_get($array, 'firstname', $phone),
-                            'lastname'   => data_get($array, 'lastname', ''),
-                            'email'      => data_get($array, 'email'),
-                            'phone'      => $phone,
-                            'password'   => bcrypt(data_get($array, 'password', Str::random(10))),
-                            'ip_address' => request()->ip(),
-                            'auth_type'  => 'firebase',
-                            'active'     => true,
-                            'phone_verified_at' => now(),
-                        ];
-                        
-                        \Log::debug('Creating new Firebase user with data', [
-                            'phone' => $phone,
-                            'has_email' => !empty(data_get($array, 'email')),
-                            'has_password' => !empty(data_get($array, 'password'))
-                        ]);
-                        
-                        $user = new $this->model();
-                        $user->fill($userData);
-                        
-                        if (!$user->save()) {
-                            throw new \Exception('Failed to save Firebase user model');
-                        }
-                        
-                        \Log::info('New Firebase user created during OTP verification', [
-                            'user_id' => $user->id,
-                            'phone' => $user->phone
-                        ]);
-                        
-                        // Assign default role
-                        $this->ensureUserHasRole($user);
-                    }
-                    
-                    // Use proceedWithSmsVerification to handle the response
-                    return $this->proceedWithSmsVerification($user, $phone);
-                    
-                } catch (\Exception $e) {
-                    \Log::error('Error in Firebase user creation/lookup', [
-                        'phone' => $phone,
-                        'error' => $e->getMessage(),
-                        'trace' => $e->getTraceAsString()
-                    ]);
-                    throw new \Exception('Error verifying your account. Please try again.');
-                }
-                
-                // Clean up any existing verification codes
-                $d = SmsCode::where("verifyId", data_get($array, 'verifyId'))->first();
-                if ($d) {
-                    $d->delete();
-                }
-                
-                // This code was unreachable because it was after a return statement
-                // Moved to the appropriate place in the flow
+            // Get the SMS code record with lock to prevent race conditions
+            $data = \App\Models\SmsCode::where("verifyId", data_get($array, 'verifyId'))
+                ->lockForUpdate()
+                ->first();
+
+            \Log::debug('SMS Code Lookup', [
+                'found' => (bool)$data,
+                'verifyId' => data_get($array, 'verifyId'),
+                'expired' => $data ? now()->gt($data->expiredAt) : null,
+                'code_matches' => $data ? ($data->OTPCode === data_get($array, 'verifyCode')) : null
+            ]);
+
+            if (empty($data)) {
+                \Log::error('SmsCode not found', ['verifyId' => data_get($array, 'verifyId')]);
+                \DB::rollBack();
+                return $this->onErrorResponse([
+                    'code'    => ResponseError::ERROR_404,
+                    'message' => __('errors.' . ResponseError::ERROR_404, locale: $this->language)
+                ]);
             }
+
+            // Check if OTP is expired
+            if (now()->gt($data->expiredAt)) {
+                \Log::error('OTP code expired', [
+                    'expiredAt' => $data->expiredAt,
+                    'now' => now(),
+                    'verifyId' => $data->verifyId
+                ]);
+                \DB::rollBack();
+                return $this->onErrorResponse([
+                    'code'    => ResponseError::ERROR_203,
+                    'message' => __('errors.' . ResponseError::ERROR_203, locale: $this->language)
+                ]);
+            }
+
+            // Verify OTP code
+            if ($data->OTPCode !== data_get($array, 'verifyCode')) {
+                \Log::error('Invalid OTP code', [
+                    'expected' => $data->OTPCode,
+                    'received' => data_get($array, 'verifyCode'),
+                    'verifyId' => $data->verifyId
+                ]);
+                \DB::rollBack();
+                return $this->onErrorResponse([
+                    'code'    => ResponseError::ERROR_201,
+                    'message' => __('errors.' . ResponseError::ERROR_201, locale: $this->language)
+                ]);
+            }
+                
+            // Cleanup the used OTP
+            $data->delete();
+
+            // Handle user creation/retrieval
+            $user = $this->model()->where('phone', $data->phone)->first();
             
+            if (!$user) {
+                try {
+                    $userData = [
+                        'firstname'  => $data->phone,
+                        'phone'      => $data->phone,
+                        'ip_address' => request()->ip(),
+                        'auth_type'  => $isFirebase ? 'firebase' : 'phone',
+                        'active'     => true,
+                        'phone_verified_at' => now(),
+                    ];
+
+                    if ($isFirebase) {
+                        $userData['email'] = data_get($array, 'email');
+                        $userData['firstname'] = data_get($array, 'firstname', $data->phone);
+                        $userData['lastname'] = data_get($array, 'lastname', '');
+                    }
+
+                    $user = $this->model()->create($userData);
+                    
+                    \Log::info('New user created during OTP verification', [
+                        'user_id' => $user->id,
+                        'phone' => $user->phone,
+                        'auth_type' => $isFirebase ? 'firebase' : 'phone'
+                    ]);
+                    
+                    // Assign default role
+                    $this->ensureUserHasRole($user);
+                } catch (\Exception $e) {
+                    \DB::rollBack();
+                    \Log::error('User creation failed', [
+                        'error' => $e->getMessage(),
+                        'trace' => $e->getTraceAsString()
+                    ]);
+                    throw new \Exception('Failed to create user account. Please try again.');
+                }
+            }
+                
+            // Generate auth token
+            $token = $user->createToken('api_token')->plainTextToken;
+
+            \DB::commit();
+            
+            return $this->successResponse(__('Successfully authenticated'), [
+                'token' => $token,
+                'user'  => \App\Http\Resources\UserResource::make($user),
+            ]);
+                
         } catch (\Exception $e) {
+            \DB::rollBack();
             \Log::error('Error in confirmOPTCode', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
@@ -316,12 +271,10 @@ class AuthByMobilePhone extends CoreService
             
             return $this->onErrorResponse([
                 'code'    => ResponseError::ERROR_400,
-                'message' => 'An error occurred during authentication. Please try again.'
+                'message' => 'An error occurred during authentication. Please try again.',
+                'debug' => config('app.debug') ? $e->getMessage() : null
             ]);
         }
-
-        // This code was unreachable as it was after a return statement
-        // Moved the relevant parts to their appropriate places in the flow
 
     }
 
