@@ -599,7 +599,7 @@ class AuthByMobilePhone extends CoreService
         
         try {
             // Ensure user is loaded with roles relationship
-            if (!isset($user->relationLoaded('roles'))) {
+            if (!$user->relationLoaded('roles')) {
                 $user->load('roles');
             }
             
