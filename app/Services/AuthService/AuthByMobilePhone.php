@@ -41,6 +41,7 @@ class AuthByMobilePhone extends CoreService
         $user = $this->model()->where('phone', $phone)->first();
     
         if ($user) {
+            // Update existing user
             $user->update([
                 'phone'         => $phone,
                 'ip_address'    => request()->ip(),
@@ -48,16 +49,21 @@ class AuthByMobilePhone extends CoreService
                 // Only update firstname if it doesn't already exist
                 'firstname'     => $user->firstname ?: $phone,
             ]);
+            
+            // Ensure existing user has at least the 'user' role
+            if (!$user->hasAnyRole(Role::query()->pluck('name')->toArray())) {
+                $user->syncRoles('user');
+            }
         } else {
+            // Create new user with default 'user' role
             $user = $this->model()->create([
                 'firstname'     => $phone,
                 'phone'         => $phone,
                 'ip_address'    => request()->ip(),
                 'auth_type'     => "phone"
             ]);
-        }
-    
-        if (!$user->hasAnyRole(Role::query()->pluck('name')->toArray())) {
+            
+            // Assign default 'user' role
             $user->syncRoles('user');
         }
     
