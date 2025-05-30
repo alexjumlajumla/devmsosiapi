@@ -171,7 +171,6 @@ class BroadcastService extends CoreService
                     ]);
                 }
             }
-            }
 
             if (in_array('email', $channels)) {
                 foreach ($users as $u) {
