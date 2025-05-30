@@ -565,69 +565,67 @@ class FcmTokenService
     /**
      * Check if a token is a valid FCM token format
      * 
-     * @param string $token
-     * @return bool
+     * @param string $token The FCM token to validate
+     * @return bool Returns true if the token is valid, false otherwise
      */
     public function isValidFcmToken(string $token): bool
     {
-        if (!is_string($token) || empty($token)) {
-            \Log::debug('Invalid FCM token: not a string or empty', [
+        if (empty($token) || !is_string($token)) {
+            \Log::debug('Invalid FCM token: empty or not a string', [
                 'token' => $token,
                 'type' => gettype($token)
             ]);
             return false;
         }
 
+        $allowTestTokens = filter_var(env('FIREBASE_ALLOW_TEST_TOKENS', 'true'), FILTER_VALIDATE_BOOLEAN);
+        $isTestEnv = app()->environment('local', 'staging', 'development');
+        $environment = app()->environment();
+        $tokenPrefix = substr($token, 0, 15) . '...';
+        $tokenLength = strlen($token);
+
         // Check for test tokens
         if (str_starts_with($token, 'test_fcm_token_') || str_starts_with($token, 'test_')) {
-            $allowTestTokens = filter_var(env('FIREBASE_ALLOW_TEST_TOKENS', 'true'), FILTER_VALIDATE_BOOLEAN);
-            $isTestEnv = app()->environment('local', 'staging', 'development');
-            
-            if ($allowTestTokens || $isTestEnv) {
-                // For test tokens, we'll accept any format as long as it's not empty
-                $isValid = strlen($token) > 0;
-                
-                if ($isValid) {
-                    \Log::debug('Accepted test FCM token', [
-                        'token_prefix' => substr($token, 0, 15) . '...',
-                        'length' => strlen($token),
-                        'user_id' => str_replace('test_fcm_token_', '', $token),
-                        'FIREBASE_ALLOW_TEST_TOKENS' => $allowTestTokens ? 'true' : 'false',
-                        'environment' => app()->environment(),
-                        'is_test_token' => true
-                    ]);
-                    return true;
-                }
+            if ($isTestEnv && $allowTestTokens) {
+                \Log::debug('Accepting test FCM token in test environment', [
+                    'token_prefix' => $tokenPrefix,
+                    'length' => $tokenLength,
+                    'user_id' => $this->extractUserIdFromToken($token),
+                    'environment' => $environment
+                ]);
+                return true;
             }
             
-            \Log::debug('Rejected test FCM token (not allowed in this environment)', [
-                'token_prefix' => substr($token, 0, 15) . '...',
-                'length' => strlen($token),
-                'user_id' => str_replace('test_fcm_token_', '', $token),
-                'FIREBASE_ALLOW_TEST_TOKENS' => $allowTestTokens ? 'true' : 'false',
-                'environment' => app()->environment(),
+            \Log::debug('Rejecting test FCM token', [
+                'token_prefix' => $tokenPrefix,
+                'length' => $tokenLength,
+                'environment' => $environment,
+                'allow_test_tokens' => $allowTestTokens ? 'true' : 'false',
+                'is_test_environment' => $isTestEnv ? 'true' : 'false',
                 'reason' => 'Test tokens not allowed in this environment'
             ]);
             return false;
         }
 
         // Basic format check for real FCM tokens
-        // FCM tokens are typically 152-163 characters long and contain alphanumeric characters and some special characters
+        // FCM tokens should be alphanumeric with some special characters and within a reasonable length
         $isValid = (bool) preg_match('/^[a-zA-Z0-9_\-:]+$/', $token);
+        $isValid = $isValid && $tokenLength > 50 && $tokenLength < 200;
         
         if (!$isValid) {
             \Log::debug('Invalid FCM token format', [
-                'token_prefix' => substr($token, 0, 15) . '...',
-                'length' => strlen($token),
-                'first_10_chars' => substr($token, 0, 10) . '...',
-                'regex_match' => preg_match('/^[a-zA-Z0-9_\-:]+$/', $token),
-                'is_test_token' => false
+                'token_prefix' => $tokenPrefix,
+                'length' => $tokenLength,
+                'is_alnum' => (bool)preg_match('/^[a-zA-Z0-9_\-:]+$/', $token),
+                'length_ok' => ($tokenLength > 50 && $tokenLength < 200) ? 'true' : 'false',
+                'environment' => $environment,
+                'reason' => 'Token does not match expected format or length'
             ]);
         } else {
             \Log::debug('Valid FCM token', [
-                'token_prefix' => substr($token, 0, 10) . '...',
-                'length' => strlen($token),
-                'is_test_token' => false
+                'token_prefix' => $tokenPrefix,
+                'length' => $tokenLength,
+                'environment' => $environment
             ]);
         }
         
