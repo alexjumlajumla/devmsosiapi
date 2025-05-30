@@ -376,10 +376,10 @@ class FcmTokenService
             ];
         }
         
-        $allowTestTokens = filter_var(env('FIREBASE_ALLOW_TEST_TOKENS', 'false'), FILTER_VALIDATE_BOOLEAN);
+        $allowTestTokens = filter_var(env('FIREBASE_ALLOW_TEST_TOKENS', 'true'), FILTER_VALIDATE_BOOLEAN);
         $isTestEnv = app()->environment('local', 'staging', 'development');
         
-        // If we're allowing test tokens, filter them out and just log them
+        // Separate test tokens from real tokens
         $testTokens = [];
         $realTokens = [];
         
@@ -391,22 +391,34 @@ class FcmTokenService
             }
         }
         
-        // Handle test tokens
+        // Handle test tokens in test environments or when explicitly allowed
         if (!empty($testTokens) && ($allowTestTokens || $isTestEnv)) {
-            $this->log('info', 'Skipping FCM send for test tokens', [
+            $this->log('info', 'Processing test tokens in test environment', [
                 'test_token_count' => count($testTokens),
-                'test_tokens_sample' => array_slice($testTokens, 0, 3)
+                'test_tokens_sample' => array_slice($testTokens, 0, 3),
+                'environment' => app()->environment(),
+                'FIREBASE_ALLOW_TEST_TOKENS' => $allowTestTokens ? 'true' : 'false',
+                'has_real_tokens' => !empty($realTokens) ? 'true' : 'false'
             ]);
             
-            // Return success for test tokens
-            return [
-                'success' => true,
-                'message' => 'Test tokens processed (not sent to FCM)',
-                'sent' => count($testTokens),
-                'failed' => 0,
-                'invalid_tokens' => [],
-                'is_test' => true
-            ];
+            // If we have real tokens, we'll process them below
+            // If not, we'll return early with success for test tokens
+            if (empty($realTokens)) {
+                return [
+                    'success' => true,
+                    'message' => 'Test tokens processed (not sent to FCM)',
+                    'sent' => count($testTokens),
+                    'failed' => 0,
+                    'invalid_tokens' => [],
+                    'is_test' => true
+                ];
+            }
+            
+            // Log that we're proceeding with real tokens
+            $this->log('info', 'Proceeding with real tokens while ignoring test tokens', [
+                'real_token_count' => count($realTokens),
+                'test_token_count' => count($testTokens)
+            ]);
         }
         
         $messaging = app('firebase.messaging');
@@ -534,49 +546,58 @@ class FcmTokenService
 
         // Check for test tokens
         if (str_starts_with($token, 'test_fcm_token_') || str_starts_with($token, 'test_')) {
-            $allowTestTokens = filter_var(env('FIREBASE_ALLOW_TEST_TOKENS', 'false'), FILTER_VALIDATE_BOOLEAN);
+            $allowTestTokens = filter_var(env('FIREBASE_ALLOW_TEST_TOKENS', 'true'), FILTER_VALIDATE_BOOLEAN);
             $isTestEnv = app()->environment('local', 'staging', 'development');
             
             if ($allowTestTokens || $isTestEnv) {
-                \Log::debug('Accepted test FCM token', [
-                    'token_prefix' => substr($token, 0, 15) . '...',
-                    'environment' => app()->environment(),
-                    'FIREBASE_ALLOW_TEST_TOKENS' => $allowTestTokens ? 'true' : 'false'
-                ]);
-                return true;
-            } else {
-                // Reject test tokens in production when not explicitly allowed
-                \Log::warning('Rejected test FCM token', [
-                    'token_prefix' => substr($token, 0, 15) . '...',
-                    'environment' => app()->environment(),
-                    'FIREBASE_ALLOW_TEST_TOKENS' => 'false',
-                    'reason' => 'Test tokens are not allowed in this environment'
-                ]);
-                return false;
+                // For test tokens, we'll accept any format as long as it's not empty
+                $isValid = strlen($token) > 0;
+                
+                if ($isValid) {
+                    \Log::debug('Accepted test FCM token', [
+                        'token_prefix' => substr($token, 0, 15) . '...',
+                        'length' => strlen($token),
+                        'user_id' => str_replace('test_fcm_token_', '', $token),
+                        'FIREBASE_ALLOW_TEST_TOKENS' => $allowTestTokens ? 'true' : 'false',
+                        'environment' => app()->environment(),
+                        'is_test_token' => true
+                    ]);
+                    return true;
+                }
             }
+            
+            \Log::debug('Rejected test FCM token (not allowed in this environment)', [
+                'token_prefix' => substr($token, 0, 15) . '...',
+                'length' => strlen($token),
+                'user_id' => str_replace('test_fcm_token_', '', $token),
+                'FIREBASE_ALLOW_TEST_TOKENS' => $allowTestTokens ? 'true' : 'false',
+                'environment' => app()->environment(),
+                'reason' => 'Test tokens not allowed in this environment'
+            ]);
+            return false;
         }
 
-        // Basic validation for FCM token format
-        // FCM tokens typically contain alphanumeric characters, underscores, hyphens, and colons
+        // Basic format check for real FCM tokens
+        // FCM tokens are typically 152-163 characters long and contain alphanumeric characters and some special characters
         $isValid = (bool) preg_match('/^[a-zA-Z0-9_\-:]+$/', $token);
         
         if (!$isValid) {
             \Log::debug('Invalid FCM token format', [
-                'token' => $token,
+                'token_prefix' => substr($token, 0, 15) . '...',
                 'length' => strlen($token),
                 'first_10_chars' => substr($token, 0, 10) . '...',
-                'regex_match' => preg_match('/^[a-zA-Z0-9_\-:]+$/', $token)
+                'regex_match' => preg_match('/^[a-zA-Z0-9_\-:]+$/', $token),
+                'is_test_token' => false
             ]);
         } else {
             \Log::debug('Valid FCM token', [
                 'token_prefix' => substr($token, 0, 10) . '...',
-                'length' => strlen($token)
+                'length' => strlen($token),
+                'is_test_token' => false
             ]);
         }
         
         return $isValid;
-    }
-    
     /**
      * Check if a token is valid (alias for isValidFcmToken for backward compatibility)
      * 

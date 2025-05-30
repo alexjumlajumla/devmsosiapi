@@ -287,67 +287,168 @@ trait Notification
         array $userIds = [],
         ?string $firebaseTitle = null
     ): array {
+        $isTestEnv = app()->environment('local', 'staging', 'development');
+        $allowTestTokens = filter_var(env('FIREBASE_ALLOW_TEST_TOKENS', 'true'), FILTER_VALIDATE_BOOLEAN);
+        
+        // Log the notification attempt
+        Log::info('Sending FCM notification', [
+            'title' => $title,
+            'message' => $message,
+            'data' => $data,
+            'token_count' => count($tokens),
+            'user_ids' => $userIds,
+            'environment' => app()->environment(),
+            'allow_test_tokens' => $allowTestTokens,
+            'is_test_environment' => $isTestEnv,
+            'notification_type' => data_get($data, 'type', data_get($data, 'order.type', 'general'))
+        ]);
         $notificationType = data_get($data, 'type', data_get($data, 'order.type', 'general'));
         $title = $firebaseTitle ?: $title ?: config('app.name');
         
+        // Add additional data for tracking
         $fcmData = array_merge($data, [
             'type' => $notificationType,
             'timestamp' => now()->toDateTimeString(),
             'click_action' => 'FLUTTER_NOTIFICATION_CLICK',
+            'environment' => app()->environment(),
+            'is_test_notification' => $isTestEnv,
+            'notification_id' => (string) Str::uuid(),
         ]);
+        
+        // Clean up any sensitive data that shouldn't be in the notification
+        unset($fcmData['password'], $fcmData['password_confirmation'], $fcmData['token']);
         
         try {
             // If we have user IDs, we can use Laravel's notification system
             if (!empty($userIds)) {
                 $users = User::whereIn('id', $userIds)->get();
+                $successCount = 0;
+                $errors = [];
+                
+                Log::info('Sending notifications to users', [
+                    'user_count' => $users->count(),
+                    'user_ids' => $userIds
+                ]);
                 
                 foreach ($users as $user) {
-                    $user->notify(
-                        new FcmNotification($title, $message, $fcmData, $notificationType)
-                    );
+                    try {
+                        $user->notify(
+                            new FcmNotification($title, $message, $fcmData, $notificationType)
+                        );
+                        $successCount++;
+                    } catch (\Exception $e) {
+                        Log::error('Failed to send notification to user', [
+                            'user_id' => $user->id,
+                            'error' => $e->getMessage(),
+                            'notification_type' => $notificationType
+                        ]);
+                        $errors[] = [
+                            'user_id' => $user->id,
+                            'error' => $e->getMessage()
+                        ];
+                    }
                 }
                 
-                return [
-                    'status' => 'success',
-                    'message' => 'Notification sent via new FCM system',
+                $result = [
+                    'status' => $successCount > 0 ? 'partial' : 'error',
+                    'message' => $successCount > 0 
+                        ? 'Sent to ' . $successCount . ' of ' . count($users) . ' users' 
+                        : 'Failed to send to all users',
                     'user_count' => $users->count(),
+                    'success_count' => $successCount,
+                    'failed_count' => count($users) - $successCount,
                     'notification_type' => $notificationType,
                 ];
+                
+                if (!empty($errors)) {
+                    $result['errors'] = $errors;
+                }
+                
+                return $result;
             }
             
             // If we only have tokens, we need to use the FCM service directly
             $fcmService = app(FcmTokenService::class);
             $responses = [];
+            $sentCount = 0;
+            $failedCount = 0;
+            $invalidTokens = [];
             
             // Process in chunks to avoid hitting FCM limits
-            $chunks = array_chunk($tokens, 500);
+            $chunks = array_chunk($tokens, 100); // Reduced chunk size for better error handling
             
-            foreach ($chunks as $chunk) {
-                $cloudMessage = CloudMessage::new()
-                    ->withNotification(FcmMessageNotification::create($title, $message))
-                    ->withData($fcmData)
-                    ->withDefaultSounds()
-                    ->withHighPriority()
-                    ->withApnsConfig([
-                        'payload' => [
-                            'aps' => [
-                                'sound' => 'default',
-                                'badge' => 1,
-                                'mutable-content' => 1,
+            Log::info('Sending notifications to FCM tokens', [
+                'token_count' => count($tokens),
+                'chunk_count' => count($chunks),
+                'notification_type' => $notificationType
+            ]);
+            
+            foreach ($chunks as $chunkIndex => $chunk) {
+                try {
+                    $cloudMessage = CloudMessage::new()
+                        ->withNotification(FcmMessageNotification::create($title, $message))
+                        ->withData($fcmData)
+                        ->withDefaultSounds()
+                        ->withHighPriority()
+                        ->withApnsConfig([
+                            'payload' => [
+                                'aps' => [
+                                    'sound' => 'default',
+                                    'badge' => 1,
+                                    'mutable-content' => 1,
+                                ],
                             ],
-                        ],
+                        ]);
+                    
+                    Log::debug('Sending FCM chunk', [
+                        'chunk_index' => $chunkIndex,
+                        'chunk_size' => count($chunk),
+                        'first_token' => substr(reset($chunk), 0, 10) . '...'
                     ]);
-                
-                $responses[] = $fcmService->sendToTokens($chunk, $cloudMessage);
+                    
+                    $response = $fcmService->sendToTokens($chunk, $cloudMessage);
+                    $responses[] = $response;
+                    
+                    // Update counters
+                    $sentCount += $response['sent'] ?? 0;
+                    $failedCount += $response['failed'] ?? 0;
+                    
+                    if (!empty($response['invalid_tokens'])) {
+                        $invalidTokens = array_merge($invalidTokens, $response['invalid_tokens']);
+                    }
+                    
+                } catch (\Exception $e) {
+                    Log::error('Error sending FCM chunk', [
+                        'chunk_index' => $chunkIndex,
+                        'error' => $e->getMessage(),
+                        'trace' => $e->getTraceAsString()
+                    ]);
+                    $failedCount += count($chunk);
+                }
             }
             
-            return [
-                'status' => 'success',
-                'message' => 'Notification sent via new FCM system',
+            // Log the overall result
+            $result = [
+                'status' => $failedCount === 0 ? 'success' : ($sentCount > 0 ? 'partial' : 'error'),
+                'message' => $failedCount === 0 
+                    ? 'All notifications sent successfully' 
+                    : ($sentCount > 0 
+                        ? "$sentCount sent, $failedCount failed" 
+                        : 'All notifications failed to send'),
                 'user_count' => count($tokens),
+                'sent_count' => $sentCount,
+                'failed_count' => $failedCount,
                 'notification_type' => $notificationType,
-                'responses' => $responses
+                'invalid_token_count' => count($invalidTokens),
             ];
+            
+            if (!empty($invalidTokens)) {
+                $result['invalid_token_samples'] = array_slice($invalidTokens, 0, 5);
+            }
+            
+            Log::info('FCM notification batch completed', $result);
+            
+            return $result;
         } catch (\Exception $e) {
             Log::error('Error sending FCM notification: ' . $e->getMessage(), [
                 'exception' => $e,
