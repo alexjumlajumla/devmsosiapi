@@ -105,22 +105,38 @@ class AuthByMobilePhone extends CoreService
                     // Try to create the user with detailed error handling
                     try {
                         // First, check if user with this phone already exists (race condition check)
-                        if ($this->model()->where('phone', $phone)->exists()) {
-                            throw new \Exception('User with this phone number already exists');
-                        }
-                        
-                        // Try to create the user
-                        $user = new $this->model();
-                        $user->fill($userData);
-                        
-                        // Save and check for errors
-                        if (!$user->save()) {
-                            throw new \Exception('Failed to save user model');
-                        }
-                        
-                        // Verify the user was saved
-                        if (!$user->exists || !$user->id) {
-                            throw new \Exception('User model was not saved correctly');
+                        $existingUser = $this->model()->where('phone', $phone)->first();
+                        if ($existingUser) {
+                            \Log::warning('User with this phone number already exists', [
+                                'phone' => $phone,
+                                'existing_user_id' => $existingUser->id
+                            ]);
+                            $user = $existingUser;
+                        } else {
+                            // Try to create the user
+                            $user = new $this->model();
+                            $user->fill($userData);
+                            
+                            // Save and check for errors
+                            if (!$user->save()) {
+                                $errors = $user->getErrors() ?: 'Unknown error';
+                                \Log::error('Failed to save user model', [
+                                    'phone' => $phone,
+                                    'errors' => $errors,
+                                    'user_data' => $userData
+                                ]);
+                                throw new \Exception('Failed to save user: ' . (is_array($errors) ? json_encode($errors) : $errors));
+                            }
+                            
+                            // Verify the user was saved
+                            if (!$user->exists || !$user->id) {
+                                throw new \Exception('User model was not saved correctly');
+                            }
+                            
+                            \Log::info('User created successfully', [
+                                'user_id' => $user->id,
+                                'phone' => $user->phone
+                            ]);
                         }
                         
                     } catch (\Exception $createEx) {
@@ -129,7 +145,8 @@ class AuthByMobilePhone extends CoreService
                             'error' => $createEx->getMessage(),
                             'data' => $userData,
                             'trace' => $createEx->getTraceAsString(),
-                            'db_error' => $createEx instanceof \PDOException ? $createEx->getMessage() : 'Not a database error'
+                            'db_error' => $createEx instanceof \PDOException ? $createEx->getMessage() : 'Not a database error',
+                            'phone' => $phone
                         ];
                         
                         // Check for database errors
@@ -146,8 +163,22 @@ class AuthByMobilePhone extends CoreService
                         
                         \Log::error('Detailed user creation error', $errorInfo);
                         
+                        // Check for duplicate entry error
+                        if (str_contains(strtolower($createEx->getMessage()), 'duplicate entry')) {
+                            // Try to get the existing user
+                            $existingUser = $this->model()->where('phone', $phone)->first();
+                            if ($existingUser) {
+                                \Log::info('Found existing user after duplicate error', [
+                                    'phone' => $phone,
+                                    'user_id' => $existingUser->id
+                                ]);
+                                $user = $existingUser;
+                                return $this->proceedWithSmsVerification($user, $phone);
+                            }
+                        }
+                        
                         // Re-throw with a more specific message
-                        throw new \Exception('Failed to create user: ' . $createEx->getMessage());
+                        throw new \Exception('Failed to create user. Please try again later.');
                     }
                     
                     // Verify the user was actually saved
@@ -211,34 +242,33 @@ class AuthByMobilePhone extends CoreService
                     'phone' => $phone,
                     'trace' => debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 5)
                 ]);
-                throw new \Exception('Failed to create or update user. Please try again later.');
-            }
-            
-            // Send SMS with verification code
-            $sms = (new SMSBaseService)->smsGateway($phone);
-            \Log::debug('SMS gateway response', $sms);
-            
-            if (!data_get($sms, 'status')) {
-                $errorMessage = data_get($sms, 'message', 'Failed to send verification code');
-                \Log::error('SMS Gateway Error', [
-                    'phone' => $phone,
-                    'error' => $errorMessage
-                ]);
                 
-                // Still return success but with a flag indicating SMS wasn't sent
-                return $this->successResponse(__('errors.' . ResponseError::SUCCESS, locale: $this->language), [
-                    'verifyId'  => null,
-                    'phone'     => $phone,
-                    'message'   => 'Verification code could not be sent. Please try again.',
-                    'sms_error' => $errorMessage
-                ]);
+                // Check if user exists but couldn't be retrieved
+                $existingUser = $this->model()->withTrashed()->where('phone', $phone)->first();
+                if ($existingUser) {
+                    \Log::warning('Found existing user after creation failure', [
+                        'phone' => $phone,
+                        'user_id' => $existingUser->id,
+                        'deleted_at' => $existingUser->deleted_at
+                    ]);
+                    
+                    // If user was soft-deleted, restore them
+                    if ($existingUser->trashed()) {
+                        $existingUser->restore();
+                        \Log::info('Restored soft-deleted user', [
+                            'user_id' => $existingUser->id,
+                            'phone' => $phone
+                        ]);
+                    }
+                    
+                    $user = $existingUser;
+                } else {
+                    throw new \Exception('Failed to create or update user. Please try again later.');
+                }
             }
             
-            return $this->successResponse(__('errors.' . ResponseError::SUCCESS, locale: $this->language), [
-                'verifyId'  => data_get($sms, 'verifyId'),
-                'phone'     => data_get($sms, 'phone'),
-                'message'   => data_get($sms, 'message', '')
-            ]);
+            // Proceed with SMS verification
+            return $this->proceedWithSmsVerification($user, $phone);
             
         } catch (\Exception $e) {
             \Log::error('Authentication Error', [
@@ -748,6 +778,60 @@ class AuthByMobilePhone extends CoreService
                 $user->id ?? 'unknown',
                 $e->getMessage()
             ), 0, $e);
+        }
+    }
+    
+    /**
+     * Handle SMS verification for a user
+     * 
+     * @param \App\Models\User $user
+     * @param string $phone
+     * @return JsonResponse
+     */
+    protected function proceedWithSmsVerification($user, $phone): JsonResponse
+    {
+        try {
+            // Ensure user has a role
+            $this->ensureUserHasRole($user);
+            
+            // Send SMS with verification code
+            $sms = (new SMSBaseService)->smsGateway($phone);
+            \Log::debug('SMS gateway response', $sms);
+            
+            if (!data_get($sms, 'status')) {
+                $errorMessage = data_get($sms, 'message', 'Failed to send verification code');
+                \Log::error('SMS Gateway Error', [
+                    'phone' => $phone,
+                    'error' => $errorMessage
+                ]);
+                
+                // Still return success but with a flag indicating SMS wasn't sent
+                return $this->successResponse(__('errors.' . ResponseError::SUCCESS, locale: $this->language), [
+                    'verifyId'  => null,
+                    'phone'     => $phone,
+                    'message'   => 'Verification code could not be sent. Please try again.',
+                    'sms_error' => $errorMessage
+                ]);
+            }
+            
+            return $this->successResponse(__('errors.' . ResponseError::SUCCESS, locale: $this->language), [
+                'verifyId'  => data_get($sms, 'verifyId'),
+                'phone'     => data_get($sms, 'phone'),
+                'message'   => data_get($sms, 'message', '')
+            ]);
+            
+        } catch (\Exception $e) {
+            \Log::error('Error in proceedWithSmsVerification', [
+                'phone' => $phone,
+                'user_id' => $user->id ?? null,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            
+            return $this->onErrorResponse([
+                'code'    => ResponseError::ERROR_400,
+                'message' => 'Failed to proceed with verification: ' . $e->getMessage()
+            ]);
         }
     }
     
