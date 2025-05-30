@@ -94,11 +94,25 @@ class AuthByMobilePhone extends CoreService
                     'phone_verified_at' => now()
                 ];
                 
-                $user = $this->model()->create($userData);
-                \Log::info('Created new user', ['user_id' => $user->id]);
-                
-                // Assign default 'user' role
-                $this->assignUserRole($user);
+                try {
+                    $user = $this->model()->create($userData);
+                    
+                    if (!$user) {
+                        throw new \Exception('Failed to create user record');
+                    }
+                    
+                    \Log::info('Created new user', ['user_id' => $user->id]);
+                    
+                    // Assign default 'user' role
+                    $this->assignUserRole($user);
+                } catch (\Exception $e) {
+                    \Log::error('User creation failed', [
+                        'phone' => $phone,
+                        'error' => $e->getMessage(),
+                        'trace' => $e->getTraceAsString()
+                    ]);
+                    throw new \Exception('Failed to create user: ' . $e->getMessage());
+                }
             }
             
             if (!$user) {
@@ -478,38 +492,84 @@ class AuthByMobilePhone extends CoreService
      * @return void
      * @throws \Exception
      */
+    /**
+     * Assign the default 'user' role to a user
+     * 
+     * @param \App\Models\User $user
+     * @return void
+     * @throws \Exception
+     */
     protected function assignUserRole($user): void
     {
+        if (!$user) {
+            throw new \Exception('User object is null in assignUserRole');
+        }
+        
+        if (!is_object($user) || !method_exists($user, 'syncRoles')) {
+            throw new \Exception('Invalid user object provided to assignUserRole');
+        }
+        
         try {
-            if (!$user) {
-                throw new \Exception('User object is null');
+            // Ensure user is saved to database
+            if (!$user->exists) {
+                $user->save();
             }
             
+            // Get or create the default 'user' role
             $defaultRole = Role::where('name', 'user')->first();
             
             if (!$defaultRole) {
                 // Create the default role if it doesn't exist
                 $defaultRole = Role::create([
                     'name' => 'user',
-                    'guard_name' => 'api'
+                    'guard_name' => 'api',
+                    'created_at' => now(),
+                    'updated_at' => now()
                 ]);
-                \Log::info('Created default user role');
+                
+                if (!$defaultRole) {
+                    throw new \Exception('Failed to create default user role');
+                }
+                
+                \Log::info('Created default user role', ['role_id' => $defaultRole->id]);
             }
             
+            // Ensure the user model uses the correct guard
+            $user->setAppends([]);
+            
             // Assign the role to the user
-            $user->syncRoles([$defaultRole->name]);
+            $result = $user->syncRoles([$defaultRole->name]);
+            
+            if (!$result) {
+                throw new \Exception('Failed to assign role to user');
+            }
+            
+            // Refresh the user model to ensure roles are loaded
+            $user->load('roles');
+            
             \Log::info('Assigned default role to user', [
                 'user_id' => $user->id,
-                'role' => $defaultRole->name
+                'role' => $defaultRole->name,
+                'user_roles' => $user->roles->pluck('name')->toArray()
             ]);
             
         } catch (\Exception $e) {
-            \Log::error('Error in assignUserRole', [
+            $errorContext = [
                 'user_id' => $user->id ?? 'unknown',
+                'user_exists' => isset($user->id) ? 'yes' : 'no',
+                'user_class' => get_class($user),
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
-            ]);
-            throw $e;
+            ];
+            
+            \Log::error('Error in assignUserRole', $errorContext);
+            
+            // Re-throw with more context
+            throw new \Exception(sprintf(
+                'Failed to assign role to user %s: %s',
+                $user->id ?? 'unknown',
+                $e->getMessage()
+            ), 0, $e);
         }
     }
     
@@ -520,24 +580,55 @@ class AuthByMobilePhone extends CoreService
      * @return void
      * @throws \Exception
      */
+    /**
+     * Ensure the user has a default role assigned
+     * 
+     * @param \App\Models\User $user
+     * @return void
+     * @throws \Exception
+     */
     protected function ensureUserHasRole($user): void
     {
+        if (!$user) {
+            throw new \Exception('User object is null in ensureUserHasRole');
+        }
+        
+        if (!is_object($user) || !method_exists($user, 'roles')) {
+            throw new \Exception('Invalid user object provided to ensureUserHasRole');
+        }
+        
         try {
-            if (!$user) {
-                throw new \Exception('User object is null');
+            // Ensure user is loaded with roles relationship
+            if (!isset($user->relationLoaded('roles'))) {
+                $user->load('roles');
             }
             
             // Check if user has any roles
             if ($user->roles->isEmpty()) {
                 $this->assignUserRole($user);
+            } else {
+                \Log::debug('User already has roles', [
+                    'user_id' => $user->id,
+                    'roles' => $user->roles->pluck('name')->toArray()
+                ]);
             }
         } catch (\Exception $e) {
-            \Log::error('Error in ensureUserHasRole', [
+            $errorContext = [
                 'user_id' => $user->id ?? 'unknown',
+                'user_exists' => isset($user->id) ? 'yes' : 'no',
+                'user_class' => get_class($user),
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
-            ]);
-            throw $e;
+            ];
+            
+            \Log::error('Error in ensureUserHasRole', $errorContext);
+            
+            // Re-throw with more context
+            throw new \Exception(sprintf(
+                'Failed to ensure user %s has role: %s',
+                $user->id ?? 'unknown',
+                $e->getMessage()
+            ), 0, $e);
         }
     }
 }
