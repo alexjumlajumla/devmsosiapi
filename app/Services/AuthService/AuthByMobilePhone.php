@@ -36,8 +36,16 @@ class AuthByMobilePhone extends CoreService
 	
     public function authentication(array $array): JsonResponse
     {
+        $startTime = microtime(true);
+        $logContext = [
+            'phone' => data_get($array, 'phone'),
+            'ip' => request()->ip(),
+            'user_agent' => request()->userAgent(),
+            'request_data' => array_merge($array, ['phone' => '***'])
+        ];
+        
         try {
-            \Log::debug('Starting authentication', ['phone' => data_get($array, 'phone')]);
+            \Log::debug('Starting authentication', $logContext);
             
             $phone = preg_replace('/\D/', '', data_get($array, 'phone'));
             $phone = str_contains($phone, '+') ? substr($phone, 1) : $phone;
@@ -46,8 +54,28 @@ class AuthByMobilePhone extends CoreService
                 throw new \Exception('Phone number is required');
             }
             
-            $user = $this->model()->where('phone', $phone)->first();
-            \Log::debug('User lookup result', ['phone' => $phone, 'user_found' => (bool)$user]);
+            // Update log context with cleaned phone
+            $logContext['phone_cleaned'] = $phone;
+            \Log::debug('Phone number cleaned', $logContext);
+            
+            // Check database connection
+            try {
+                $dbCheck = \DB::connection()->getPdo();
+                $logContext['db_connection'] = $dbCheck ? 'Connected' : 'Failed';
+                \Log::debug('Database connection check', $logContext);
+            } catch (\Exception $e) {
+                $logContext['db_error'] = $e->getMessage();
+                \Log::error('Database connection failed', $logContext);
+            }
+            
+            // Check if user exists
+            $user = $this->model()->withTrashed()->where('phone', $phone)->first();
+            $logContext['user_found'] = (bool)$user;
+            $logContext['user_id'] = $user ? $user->id : null;
+            $logContext['user_active'] = $user ? $user->active : null;
+            $logContext['user_deleted'] = $user ? $user->trashed() : null;
+            
+            \Log::debug('User lookup result', $logContext);
             
             if ($user) {
                 // Update existing user
@@ -153,10 +181,27 @@ class AuthByMobilePhone extends CoreService
                         
                         // Try to create the user
                         $user = new $this->model();
+                        $logContext['user_model'] = get_class($user);
+                        
+                        // Log before filling
+                        \Log::debug('Filling user model with data', array_merge($logContext, [
+                            'user_data' => array_merge($userData, ['password' => '***'])
+                        ]));
+                        
                         $user->fill($userData);
                         
+                        // Log after filling
+                        \Log::debug('User model filled', array_merge($logContext, [
+                            'user_attributes' => $user->getAttributes(),
+                            'original' => $user->getOriginal(),
+                            'changes' => $user->getChanges()
+                        ]));
+                        
                         // Save and check for errors
-                        if (!$user->save()) {
+                        \Log::debug('Attempting to save user', $logContext);
+                        $saved = $user->save();
+                        
+                        if (!$saved) {
                             $errors = method_exists($user, 'getErrors') ? $user->getErrors() : 'Unknown error';
                             $errorMessage = is_array($errors) ? json_encode($errors) : (string) $errors;
                             
@@ -194,7 +239,19 @@ class AuthByMobilePhone extends CoreService
                         
                         // Verify the user was saved
                         if (!$user->exists || !$user->id) {
-                            throw new \Exception('User model was not saved correctly');
+                            $errorMsg = 'User model was not saved correctly. ';
+                            $errorMsg .= 'Exists: ' . ($user->exists ? 'Yes' : 'No') . ', ';
+                            $errorMsg .= 'ID: ' . ($user->id ?? 'null');
+                            
+                            \Log::error($errorMsg, array_merge($logContext, [
+                                'user_exists' => $user->exists,
+                                'user_id' => $user->id,
+                                'user_attributes' => $user->getAttributes(),
+                                'original' => $user->getOriginal(),
+                                'changes' => $user->getChanges()
+                            ]));
+                            
+                            throw new \Exception($errorMsg);
                         }
                         
                         // Ensure user has a role
@@ -209,14 +266,20 @@ class AuthByMobilePhone extends CoreService
                     } catch (\Exception $createEx) {
                         // Log detailed error information
                         $errorMessage = $createEx->getMessage();
-                        $errorInfo = [
+                        $errorInfo = array_merge($logContext, [
                             'error' => $errorMessage,
                             'data' => $userData,
                             'trace' => $createEx->getTraceAsString(),
                             'db_error' => $createEx instanceof \PDOException ? $createEx->getMessage() : 'Not a database error',
-                            'phone' => $phone,
-                            'exception_class' => get_class($createEx)
-                        ];
+                            'exception_class' => get_class($createEx),
+                            'execution_time' => round(microtime(true) - $startTime, 3) . 's',
+                            'memory_usage' => round(memory_get_usage() / 1024 / 1024, 2) . 'MB'
+                        ]);
+                        
+                        // Add database query log if available
+                        if (config('app.debug')) {
+                            $errorInfo['queries'] = \DB::getQueryLog();
+                        }
                         
                         // Check for database errors
                         if ($createEx->getPrevious() instanceof \PDOException) {
@@ -364,19 +427,43 @@ class AuthByMobilePhone extends CoreService
                 }
             }
             
+            // Log successful authentication
+            $logContext['execution_time'] = round(microtime(true) - $startTime, 3) . 's';
+            $logContext['memory_usage'] = round(memory_get_usage() / 1024 / 1024, 2) . 'MB';
+            \Log::info('Authentication successful, proceeding with SMS verification', $logContext);
+            
             // Proceed with SMS verification
             return $this->proceedWithSmsVerification($user, $phone);
             
         } catch (\Exception $e) {
-            \Log::error('Authentication Error', [
-                'phone' => $phone ?? 'unknown',
+            $errorContext = array_merge($logContext, [
                 'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
+                'exception' => get_class($e),
+                'trace' => $e->getTraceAsString(),
+                'execution_time' => round(microtime(true) - $startTime, 3) . 's',
+                'memory_usage' => round(memory_get_usage() / 1024 / 1024, 2) . 'MB',
+                'line' => $e->getLine(),
+                'file' => $e->getFile()
             ]);
+            
+            // Add database error details if available
+            if ($e->getPrevious() instanceof \PDOException) {
+                $pdoEx = $e->getPrevious();
+                $errorContext['pdo_error'] = [
+                    'code' => $pdoEx->getCode(),
+                    'message' => $pdoEx->getMessage(),
+                    'sql_state' => $pdoEx->errorInfo[0] ?? null,
+                    'driver_code' => $pdoEx->errorInfo[1] ?? null,
+                    'driver_message' => $pdoEx->errorInfo[2] ?? null,
+                ];
+            }
+            
+            \Log::error('Authentication Error', $errorContext);
             
             return $this->onErrorResponse([
                 'code'    => ResponseError::ERROR_400,
-                'message' => $e->getMessage()
+                'message' => $e->getMessage(),
+                'trace' => config('app.debug') ? $e->getTraceAsString() : null
             ]);
         }
     }
@@ -887,47 +974,92 @@ class AuthByMobilePhone extends CoreService
      */
     protected function proceedWithSmsVerification($user, $phone): JsonResponse
     {
+        $startTime = microtime(true);
+        $logContext = [
+            'user_id' => $user->id ?? null,
+            'phone' => $phone,
+            'ip' => request()->ip(),
+            'user_agent' => request()->userAgent()
+        ];
+        
         try {
+            \Log::debug('Starting SMS verification process', $logContext);
+            
             // Ensure user has a role
             $this->ensureUserHasRole($user);
+            \Log::debug('User role verified', $logContext);
             
             // Send SMS with verification code
+            \Log::debug('Sending SMS via SMSBaseService', $logContext);
             $sms = (new SMSBaseService)->smsGateway($phone);
-            \Log::debug('SMS gateway response', $sms);
+            
+            $logContext['sms_response'] = $sms;
+            \Log::debug('SMS gateway response received', $logContext);
             
             if (!data_get($sms, 'status')) {
                 $errorMessage = data_get($sms, 'message', 'Failed to send verification code');
-                \Log::error('SMS Gateway Error', [
-                    'phone' => $phone,
-                    'error' => $errorMessage
-                ]);
+                $logContext['error'] = $errorMessage;
+                $logContext['sms_error'] = true;
+                
+                \Log::error('SMS Gateway Error', $logContext);
                 
                 // Still return success but with a flag indicating SMS wasn't sent
-                return $this->successResponse(__('errors.' . ResponseError::SUCCESS, locale: $this->language), [
-                    'verifyId'  => null,
-                    'phone'     => $phone,
-                    'message'   => 'Verification code could not be sent. Please try again.',
-                    'sms_error' => $errorMessage
-                ]);
+                return $this->successResponse(
+                    __('errors.' . ResponseError::SUCCESS, locale: $this->language), 
+                    [
+                        'verifyId'  => null,
+                        'phone'     => $phone,
+                        'message'   => 'Verification code could not be sent. Please try again.',
+                        'sms_error' => $errorMessage,
+                        'user_id'   => $user->id ?? null
+                    ]
+                );
             }
             
-            return $this->successResponse(__('errors.' . ResponseError::SUCCESS, locale: $this->language), [
+            $response = [
                 'verifyId'  => data_get($sms, 'verifyId'),
                 'phone'     => data_get($sms, 'phone'),
-                'message'   => data_get($sms, 'message', '')
-            ]);
+                'message'   => data_get($sms, 'message', ''),
+                'user_id'   => $user->id ?? null
+            ];
+            
+            $logContext['response'] = array_merge($response, ['verifyId' => '***']);
+            $logContext['execution_time'] = round(microtime(true) - $startTime, 3) . 's';
+            \Log::info('SMS verification process completed successfully', $logContext);
+            
+            return $this->successResponse(
+                __('errors.' . ResponseError::SUCCESS, locale: $this->language),
+                $response
+            );
             
         } catch (\Exception $e) {
-            \Log::error('Error in proceedWithSmsVerification', [
-                'phone' => $phone,
-                'user_id' => $user->id ?? null,
+            $errorContext = array_merge($logContext, [
                 'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
+                'exception' => get_class($e),
+                'trace' => $e->getTraceAsString(),
+                'execution_time' => round(microtime(true) - $startTime, 3) . 's',
+                'line' => $e->getLine(),
+                'file' => $e->getFile()
             ]);
+            
+            // Add database error details if available
+            if ($e->getPrevious() instanceof \PDOException) {
+                $pdoEx = $e->getPrevious();
+                $errorContext['pdo_error'] = [
+                    'code' => $pdoEx->getCode(),
+                    'message' => $pdoEx->getMessage(),
+                    'sql_state' => $pdoEx->errorInfo[0] ?? null,
+                    'driver_code' => $pdoEx->errorInfo[1] ?? null,
+                    'driver_message' => $pdoEx->errorInfo[2] ?? null,
+                ];
+            }
+            
+            \Log::error('Error in proceedWithSmsVerification', $errorContext);
             
             return $this->onErrorResponse([
                 'code'    => ResponseError::ERROR_400,
-                'message' => 'Failed to proceed with verification: ' . $e->getMessage()
+                'message' => 'Failed to proceed with verification: ' . $e->getMessage(),
+                'trace' => config('app.debug') ? $e->getTraceAsString() : null
             ]);
         }
     }
