@@ -47,6 +47,9 @@ class AuthByMobilePhone extends CoreService
             'timestamp' => now()->toDateTimeString()
         ];
         
+        // Log the start of authentication
+        \Log::debug('Starting authentication with detailed logging', $logContext);
+        
         try {
             \Log::debug('Starting authentication', $logContext);
             
@@ -55,6 +58,42 @@ class AuthByMobilePhone extends CoreService
             
             if (empty($phone)) {
                 throw new \Exception('Phone number is required');
+            }
+            
+            // Check for existing users with the same phone number before starting transaction
+            $existingUser = $this->model()->withTrashed()
+                ->where('phone', $phone)
+                ->first();
+                
+            if ($existingUser) {
+                \Log::debug('Found existing user with same phone number', [
+                    'phone' => $phone,
+                    'user_id' => $existingUser->id,
+                    'deleted_at' => $existingUser->deleted_at,
+                    'phone_verified_at' => $existingUser->phone_verified_at,
+                    'auth_type' => $existingUser->auth_type
+                ]);
+                
+                // If the user is soft-deleted, restore them
+                if ($existingUser->trashed()) {
+                    $existingUser->restore();
+                    $existingUser->update([
+                        'active' => true,
+                        'phone_verified_at' => $existingUser->phone_verified_at ?? now(),
+                        'ip_address' => request()->ip(),
+                        'auth_type' => 'phone',
+                        'deleted_at' => null
+                    ]);
+                    
+                    // Ensure the user has a role
+                    $this->ensureUserHasRole($existingUser);
+                    
+                    // Proceed with SMS verification for the restored user
+                    return $this->proceedWithSmsVerification($existingUser, $phone);
+                }
+                
+                // If the user exists and is not deleted, proceed with SMS verification
+                return $this->proceedWithSmsVerification($existingUser, $phone);
             }
             
             // Update log context with cleaned phone
@@ -95,7 +134,18 @@ class AuthByMobilePhone extends CoreService
                     $logContext['user_active'] = $user ? $user->active : null;
                     $logContext['user_deleted'] = $user ? $user->trashed() : null;
                     
-                    \Log::debug('User lookup in transaction', $logContext);
+                    // Log detailed user lookup information
+                    \Log::debug('User lookup in transaction', array_merge($logContext, [
+                        'user_exists' => (bool)$user,
+                        'user_id' => $user->id ?? null,
+                        'user_phone' => $user->phone ?? null,
+                        'user_phone_verified_at' => $user->phone_verified_at ?? null,
+                        'user_created_at' => $user->created_at ?? null,
+                        'user_updated_at' => $user->updated_at ?? null,
+                        'user_deleted_at' => $user->deleted_at ?? null,
+                        'user_auth_type' => $user->auth_type ?? null,
+                        'user_active' => $user->active ?? null,
+                    ]));
                     
                     if ($user) {
                         // Handle existing user (including soft-deleted ones)
@@ -208,17 +258,36 @@ class AuthByMobilePhone extends CoreService
                         'trace' => $e->getTraceAsString()
                     ]);
                     
-                    // If it's not a duplicate entry error, re-throw
-                    if (!str_contains($e->getMessage(), '1062 Duplicate entry') && 
-                        !str_contains($e->getMessage(), 'Integrity constraint violation')) {
+                    // Log the specific error for duplicate phone numbers
+                    if (str_contains($e->getMessage(), '1062 Duplicate entry') || 
+                        str_contains($e->getMessage(), 'Integrity constraint violation')) {
+                        
+                        // Log detailed information about the duplicate phone number
+                        $duplicateUser = $this->model()->withTrashed()
+                            ->where('phone', $phone)
+                            ->first();
+                            
+                        \Log::error('Duplicate phone number detected', array_merge($errorContext, [
+                            'duplicate_user_id' => $duplicateUser->id ?? null,
+                            'duplicate_user_phone' => $duplicateUser->phone ?? null,
+                            'duplicate_user_created_at' => $duplicateUser->created_at ?? null,
+                            'duplicate_user_updated_at' => $duplicateUser->updated_at ?? null,
+                            'duplicate_user_deleted_at' => $duplicateUser->deleted_at ?? null,
+                            'duplicate_user_phone_verified_at' => $duplicateUser->phone_verified_at ?? null,
+                            'error_message' => $e->getMessage(),
+                            'error_code' => $e->getCode(),
+                            'attempt' => $attempt,
+                            'max_attempts' => $maxAttempts
+                        ]));
+                        
+                        // If we've reached max attempts, throw the exception
+                        if ($attempt >= $maxAttempts) {
+                            throw new \Exception('This phone number is already in use. Please use a different phone number or try to log in.');
+                        }
+                    } else {
+                        // If it's not a duplicate entry error, re-throw
                         \Log::error('Fatal error in user authentication', $errorContext);
                         throw $e;
-                    }
-                    
-                    // If we've reached max attempts, throw the exception
-                    if ($attempt >= $maxAttempts) {
-                        \Log::error('Max retry attempts reached', $errorContext);
-                        throw new \Exception('Failed to process your request after multiple attempts. Please try again.');
                     }
                     
                     // Wait a bit before retrying (exponential backoff)
