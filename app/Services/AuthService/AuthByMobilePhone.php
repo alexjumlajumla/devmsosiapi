@@ -13,6 +13,7 @@ use App\Services\UserServices\UserWalletService;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Spatie\Permission\Models\Role;
 use Throwable;
 
@@ -95,23 +96,69 @@ class AuthByMobilePhone extends CoreService
                 ];
                 
                 try {
+                    // Log the attempt to create a new user
+                    \Log::info('Attempting to create new user', [
+                        'phone' => $phone,
+                        'data' => array_merge($userData, ['password' => '***'])
+                    ]);
+                    
+                    // Try to create the user
                     $user = $this->model()->create($userData);
                     
                     if (!$user) {
-                        throw new \Exception('Failed to create user record');
+                        throw new \Exception('User model create() returned null');
                     }
                     
-                    \Log::info('Created new user', ['user_id' => $user->id]);
+                    // Verify the user was actually saved
+                    if (!$user->exists) {
+                        throw new \Exception('User model exists() returned false after creation');
+                    }
                     
-                    // Assign default 'user' role
-                    $this->assignUserRole($user);
+                    // Refresh the model to ensure we have all database defaults
+                    $user->refresh();
+                    
+                    \Log::info('Successfully created new user', [
+                        'user_id' => $user->id,
+                        'phone' => $user->phone,
+                        'created_at' => $user->created_at
+                    ]);
+                    
+                    try {
+                        // Assign default 'user' role
+                        $this->assignUserRole($user);
+                    } catch (\Exception $roleException) {
+                        // Log but don't fail the entire registration if role assignment fails
+                        \Log::error('Role assignment failed after user creation', [
+                            'user_id' => $user->id,
+                            'error' => $roleException->getMessage(),
+                            'trace' => $roleException->getTraceAsString()
+                        ]);
+                    }
+                    
+                    // Return the user even if role assignment failed
+                    return $user;
+                    
                 } catch (\Exception $e) {
-                    \Log::error('User creation failed', [
+                    // Log detailed error information
+                    $errorContext = [
                         'phone' => $phone,
                         'error' => $e->getMessage(),
-                        'trace' => $e->getTraceAsString()
-                    ]);
-                    throw new \Exception('Failed to create user: ' . $e->getMessage());
+                        'exception' => get_class($e),
+                        'trace' => $e->getTraceAsString(),
+                        'user_data' => $userData
+                    ];
+                    
+                    // Check database connection
+                    try {
+                        $errorContext['db_connection'] = \DB::connection()->getPdo() ? 'Connected' : 'Not connected';
+                    } catch (\Exception $dbEx) {
+                        $errorContext['db_connection'] = 'Connection failed: ' . $dbEx->getMessage();
+                    }
+                    
+                    \Log::error('User creation failed', $errorContext);
+                    
+                    // Re-throw with more context but without exposing sensitive data
+                    throw new \Exception('Failed to create user. Please try again or contact support if the problem persists.');
                 }
             }
             
