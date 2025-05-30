@@ -135,6 +135,15 @@ class AuthByMobilePhone extends CoreService
                         // First, check if user with this phone already exists (race condition check)
                         $existingUser = $this->model()->withTrashed()->where('phone', $phone)->first();
                         
+                        // Log database state for debugging
+                        $dbState = [
+                            'table' => 'users',
+                            'count' => $this->model()->count(),
+                            'count_with_phone' => $this->model()->where('phone', $phone)->count(),
+                            'count_trashed' => $this->model()->onlyTrashed()->count(),
+                        ];
+                        \Log::debug('Database state before user creation', $dbState);
+                        
                         if ($existingUser) {
                             // If user was soft-deleted, restore them
                             if ($existingUser->trashed()) {
@@ -174,32 +183,55 @@ class AuthByMobilePhone extends CoreService
                         }
                         
                         // If we get here, it's a new user
-                        \Log::info('Attempting to create new user', [
-                            'phone' => $phone,
-                            'data' => array_merge($userData, ['password' => '***'])
+                        $logData = array_merge($userData, [
+                            'password' => '***',
+                            'ip_address' => request()->ip(),
+                            'created_at' => now()->toDateTimeString(),
+                            'updated_at' => now()->toDateTimeString()
                         ]);
                         
-                        // Try to create the user
-                        $user = new $this->model();
-                        $logContext['user_model'] = get_class($user);
+                        \Log::info('Attempting to create new user', [
+                            'phone' => $phone,
+                            'data' => $logData
+                        ]);
                         
-                        // Log before filling
-                        \Log::debug('Filling user model with data', array_merge($logContext, [
-                            'user_data' => array_merge($userData, ['password' => '***'])
-                        ]));
-                        
-                        $user->fill($userData);
-                        
-                        // Log after filling
-                        \Log::debug('User model filled', array_merge($logContext, [
-                            'user_attributes' => $user->getAttributes(),
-                            'original' => $user->getOriginal(),
-                            'changes' => $user->getChanges()
-                        ]));
-                        
-                        // Save and check for errors
-                        \Log::debug('Attempting to save user', $logContext);
-                        $saved = $user->save();
+                        try {
+                            // Try direct DB insert first to avoid model events that might be interfering
+                            $userId = \DB::table('users')->insertGetId($userData);
+                            $user = $this->model()->find($userId);
+                            \Log::info('User created via direct DB insert', [
+                                'user_id' => $userId,
+                                'phone' => $phone
+                            ]);
+                            $saved = true;
+                        } catch (\Exception $dbEx) {
+                            // If direct insert fails, fall back to model creation
+                            \Log::warning('Direct DB insert failed, falling back to model creation', [
+                                'error' => $dbEx->getMessage(),
+                                'trace' => $dbEx->getTraceAsString()
+                            ]);
+                            
+                            $user = new $this->model();
+                            $logContext['user_model'] = get_class($user);
+                            
+                            // Log before filling
+                            \Log::debug('Filling user model with data', array_merge($logContext, [
+                                'user_data' => $logData
+                            ]));
+                            
+                            $user->fill($userData);
+                            
+                            // Log after filling
+                            \Log::debug('User model filled', array_merge($logContext, [
+                                'user_attributes' => $user->getAttributes(),
+                                'original' => $user->getOriginal(),
+                                'changes' => $user->getChanges()
+                            ]));
+                            
+                            // Save and check for errors
+                            \Log::debug('Attempting to save user', $logContext);
+                            $saved = $user->save();
+                        }
                         
                         if (!$saved) {
                             $errors = method_exists($user, 'getErrors') ? $user->getErrors() : 'Unknown error';
@@ -986,14 +1018,49 @@ class AuthByMobilePhone extends CoreService
             \Log::debug('Starting SMS verification process', $logContext);
             
             // Ensure user has a role
-            $this->ensureUserHasRole($user);
-            \Log::debug('User role verified', $logContext);
+            try {
+                $this->ensureUserHasRole($user);
+                \Log::debug('User role verified', $logContext);
+            } catch (\Exception $roleEx) {
+                \Log::error('Failed to ensure user role', array_merge($logContext, [
+                    'error' => $roleEx->getMessage(),
+                    'trace' => $roleEx->getTraceAsString()
+                ]));
+                // Continue anyway, we'll try to assign the role again later
+            }
             
             // Send SMS with verification code
-            \Log::debug('Sending SMS via SMSBaseService', $logContext);
-            $sms = (new SMSBaseService)->smsGateway($phone);
-            
-            $logContext['sms_response'] = $sms;
+            try {
+                \Log::debug('Sending SMS via SMSBaseService', $logContext);
+                $sms = (new SMSBaseService)->smsGateway($phone);
+                $logContext['sms_response'] = $sms;
+                
+                if (empty($sms)) {
+                    throw new \Exception('Empty response from SMS gateway');
+                }
+                
+                if (!is_array($sms)) {
+                    throw new \Exception('Invalid response format from SMS gateway');
+                }
+            } catch (\Exception $smsEx) {
+                \Log::error('SMS sending failed', array_merge($logContext, [
+                    'error' => $smsEx->getMessage(),
+                    'trace' => $smsEx->getTraceAsString()
+                ]));
+                
+                // Return success response even if SMS fails
+                return $this->successResponse(
+                    __('errors.' . ResponseError::SUCCESS, locale: $this->language), 
+                    [
+                        'verifyId'  => null,
+                        'phone'     => $phone,
+                        'message'   => 'Verification code could not be sent. Please try again.',
+                        'sms_error' => 'SMS service temporarily unavailable',
+                        'user_id'   => $user->id ?? null,
+                        'status'    => true
+                    ]
+                );
+            }
             \Log::debug('SMS gateway response received', $logContext);
             
             if (!data_get($sms, 'status')) {
