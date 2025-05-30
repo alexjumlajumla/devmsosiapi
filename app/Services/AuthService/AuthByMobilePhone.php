@@ -5,6 +5,7 @@ namespace App\Services\AuthService;
 use App\Helpers\ResponseError;
 use App\Http\Resources\UserResource;
 use App\Models\Notification;
+use Illuminate\Support\Facades\DB;
 use App\Models\SmsCode;
 use App\Models\User;
 use App\Services\CoreService;
@@ -464,8 +465,76 @@ class AuthByMobilePhone extends CoreService
             $logContext['memory_usage'] = round(memory_get_usage() / 1024 / 1024, 2) . 'MB';
             \Log::info('Authentication successful, proceeding with SMS verification', $logContext);
             
-            // Proceed with SMS verification
-            return $this->proceedWithSmsVerification($user, $phone);
+            // Start transaction for user creation and SMS sending
+            DB::beginTransaction();
+            
+            try {
+                // Double-check if user exists in a transaction-safe way
+                $existingUser = $this->model()->withTrashed()->where('phone', $phone)->lockForUpdate()->first();
+                
+                if ($existingUser) {
+                    // If user was soft-deleted, restore them
+                    if ($existingUser->trashed()) {
+                        $existingUser->restore();
+                        $existingUser->update([
+                            'active' => true,
+                            'phone_verified_at' => $existingUser->phone_verified_at ?? now(),
+                            'ip_address' => request()->ip()
+                        ]);
+                        \Log::info('Restored soft-deleted user in transaction', [
+                            'user_id' => $existingUser->id,
+                            'phone' => $phone
+                        ]);
+                    }
+                    $user = $existingUser;
+                } else {
+                    // Create new user within transaction
+                    $user = $this->model()->create([
+                        'firstname' => $phone,
+                        'phone' => $phone,
+                        'ip_address' => request()->ip(),
+                        'auth_type' => 'phone',
+                        'active' => true,
+                        'phone_verified_at' => now(),
+                        'created_at' => now(),
+                        'updated_at' => now()
+                    ]);
+                    \Log::info('Created new user in transaction', ['user_id' => $user->id, 'phone' => $phone]);
+                }
+                
+                // Ensure user has a role
+                $this->ensureUserHasRole($user);
+                
+                // Commit the transaction
+                DB::commit();
+                \Log::debug('Transaction committed successfully', ['user_id' => $user->id]);
+                
+                // Proceed with SMS verification
+                return $this->proceedWithSmsVerification($user, $phone);
+                
+            } catch (\Exception $e) {
+                DB::rollBack();
+                \Log::error('User creation transaction failed', [
+                    'phone' => $phone,
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString()
+                ]);
+                
+                // If it's a duplicate entry error, try to recover
+                if (str_contains($e->getMessage(), '1062 Duplicate entry') || 
+                    str_contains($e->getMessage(), 'Integrity constraint violation')) {
+                    $existingUser = $this->model()->withTrashed()->where('phone', $phone)->first();
+                    if ($existingUser) {
+                        if ($existingUser->trashed()) {
+                            $existingUser->restore();
+                        }
+                        $this->ensureUserHasRole($existingUser);
+                        return $this->proceedWithSmsVerification($existingUser, $phone);
+                    }
+                }
+                
+                throw $e;
+            }
             
         } catch (\Exception $e) {
             $errorContext = array_merge($logContext, [
@@ -1011,8 +1080,11 @@ class AuthByMobilePhone extends CoreService
             'user_id' => $user->id ?? null,
             'phone' => $phone,
             'ip' => request()->ip(),
-            'user_agent' => request()->userAgent()
+            'user_agent' => request()->userAgent(),
+            'in_transaction' => DB::transactionLevel() > 0 ? 'yes' : 'no'
         ];
+        
+        $isInTransaction = DB::transactionLevel() > 0;
         
         try {
             \Log::debug('Starting SMS verification process', $logContext);
@@ -1026,12 +1098,39 @@ class AuthByMobilePhone extends CoreService
                     'error' => $roleEx->getMessage(),
                     'trace' => $roleEx->getTraceAsString()
                 ]));
-                // Continue anyway, we'll try to assign the role again later
+                // Try to assign role one more time
+                try {
+                    $this->assignUserRole($user);
+                } catch (\Exception $e) {
+                    // If we're in a transaction and role assignment fails, we should still proceed
+                    if ($isInTransaction) {
+                        \Log::warning('Role assignment failed but continuing in transaction', [
+                            'user_id' => $user->id,
+                            'error' => $e->getMessage()
+                        ]);
+                    } else {
+                        throw $e;
+                    }
+                }
             }
             
             // Send SMS with verification code
+            $sms = null;
+            $smsError = null;
+            
             try {
                 \Log::debug('Sending SMS via SMSBaseService', $logContext);
+                
+                // If we're in a transaction, commit it before sending SMS to avoid long-running transactions
+                if ($isInTransaction) {
+                    DB::commit();
+                    $isInTransaction = false;
+                    \Log::debug('Committed transaction before sending SMS', [
+                        'user_id' => $user->id,
+                        'phone' => $phone
+                    ]);
+                }
+                
                 $sms = (new SMSBaseService)->smsGateway($phone);
                 $logContext['sms_response'] = $sms;
                 
@@ -1043,23 +1142,35 @@ class AuthByMobilePhone extends CoreService
                     throw new \Exception('Invalid response format from SMS gateway');
                 }
             } catch (\Exception $smsEx) {
+                $smsError = $smsEx->getMessage();
                 \Log::error('SMS sending failed', array_merge($logContext, [
-                    'error' => $smsEx->getMessage(),
+                    'error' => $smsError,
                     'trace' => $smsEx->getTraceAsString()
                 ]));
                 
-                // Return success response even if SMS fails
-                return $this->successResponse(
-                    __('errors.' . ResponseError::SUCCESS, locale: $this->language), 
-                    [
-                        'verifyId'  => null,
-                        'phone'     => $phone,
-                        'message'   => 'Verification code could not be sent. Please try again.',
-                        'sms_error' => 'SMS service temporarily unavailable',
-                        'user_id'   => $user->id ?? null,
-                        'status'    => true
-                    ]
-                );
+                // If we had a transaction open, we need to handle it
+                if ($isInTransaction) {
+                    try {
+                        DB::rollBack();
+                        $isInTransaction = false;
+                        \Log::warning('Rolled back transaction due to SMS sending failure', [
+                            'user_id' => $user->id,
+                            'phone' => $phone
+                        ]);
+                    } catch (\Exception $rollbackEx) {
+                        \Log::error('Failed to rollback transaction after SMS failure', [
+                            'user_id' => $user->id,
+                            'error' => $rollbackEx->getMessage()
+                        ]);
+                    }
+                }
+                
+                // Continue to return success response even if SMS fails
+                $sms = [
+                    'status' => false,
+                    'message' => $smsError,
+                    'verifyId' => null
+                ];
             }
             \Log::debug('SMS gateway response received', $logContext);
             
@@ -1070,16 +1181,24 @@ class AuthByMobilePhone extends CoreService
                 
                 \Log::error('SMS Gateway Error', $logContext);
                 
-                // Still return success but with a flag indicating SMS wasn't sent
+                // Log the error but still return success response
+                $response = [
+                    'verifyId'  => data_get($sms, 'verifyId'),
+                    'phone'     => $phone,
+                    'message'   => 'Verification code could not be sent. Please try again.',
+                    'sms_error' => $errorMessage,
+                    'user_id'   => $user->id ?? null,
+                    'status'    => true
+                ];
+                
+                // If we have a verification ID, we can still proceed
+                if (empty($response['verifyId'])) {
+                    $response['verifyId'] = null;
+                }
+                
                 return $this->successResponse(
-                    __('errors.' . ResponseError::SUCCESS, locale: $this->language), 
-                    [
-                        'verifyId'  => null,
-                        'phone'     => $phone,
-                        'message'   => 'Verification code could not be sent. Please try again.',
-                        'sms_error' => $errorMessage,
-                        'user_id'   => $user->id ?? null
-                    ]
+                    __('errors.' . ResponseError::SUCCESS, locale: $this->language),
+                    $response
                 );
             }
             
