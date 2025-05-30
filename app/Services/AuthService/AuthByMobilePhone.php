@@ -195,26 +195,55 @@ class AuthByMobilePhone extends CoreService
             ]);
         }
 
-        if ($user) {
-            try {
-                // Check if user has any role, if not assign 'user' role
-                $roles = Role::pluck('name')->toArray();
-                if (empty($roles) || !$user->hasAnyRole($roles)) {
-                    $user->syncRoles('user');
-                }
-            } catch (\Exception $e) {
-                // If there's any error with roles, just log it and continue
-                \Log::error('Error assigning user role in confirmOPTCode: ' . $e->getMessage());
-                if ($user) {
-                    $user->syncRoles('user');
-                }
-            }
-        } else {
+        // Debug: Log user object
+        \Log::debug('User object in confirmOPTCode', [
+            'user_id' => $user ? $user->id : null,
+            'user_exists' => (bool)$user,
+            'user_class' => $user ? get_class($user) : 'null'
+        ]);
+
+        if (!$user) {
             \Log::error('Cannot assign roles: User object is null in confirmOPTCode');
             return $this->onErrorResponse([
                 'code'    => ResponseError::ERROR_404,
                 'message' => 'User not found',
             ]);
+        }
+
+        try {
+            // Debug: Before getting roles
+            \Log::debug('Attempting to get roles');
+            $roles = Role::pluck('name')->toArray();
+            
+            // Debug: After getting roles
+            \Log::debug('Roles retrieved', ['roles' => $roles]);
+            
+            if (empty($roles) || !$user->hasAnyRole($roles)) {
+                // Debug: Before syncing roles
+                \Log::debug('Syncing user roles to "user"', ['user_id' => $user->id]);
+                $user->syncRoles('user');
+                // Debug: After syncing roles
+                \Log::debug('Successfully synced roles for user', ['user_id' => $user->id]);
+            }
+        } catch (\Exception $e) {
+            // Log the full error with stack trace
+            \Log::error('Error in confirmOPTCode role assignment', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'user_id' => $user ? $user->id : null
+            ]);
+            
+            // Only try to sync roles if user exists and we can verify the method exists
+            if ($user && method_exists($user, 'syncRoles')) {
+                try {
+                    $user->syncRoles('user');
+                } catch (\Exception $syncError) {
+                    \Log::error('Failed to sync roles in error handler', [
+                        'error' => $syncError->getMessage(),
+                        'user_id' => $user->id
+                    ]);
+                }
+            }
         }
 
         if(empty($user->wallet?->uuid)) {
