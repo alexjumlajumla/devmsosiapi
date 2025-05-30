@@ -163,6 +163,14 @@ trait Notification
     protected function validateAndFilterTokens(array $tokens): array
     {
         $validatedTokens = [];
+        $allowTestTokens = filter_var(env('FIREBASE_ALLOW_TEST_TOKENS', 'false'), FILTER_VALIDATE_BOOLEAN);
+        $isTestEnv = app()->environment('local', 'staging', 'development');
+        
+        Log::debug('Validating and filtering FCM tokens', [
+            'total_tokens' => count($tokens),
+            'allow_test_tokens' => $allowTestTokens ? 'true' : 'false',
+            'is_test_environment' => $isTestEnv ? 'true' : 'false'
+        ]);
         
         foreach ($tokens as $token) {
             if (empty($token) || !is_string($token)) {
@@ -174,12 +182,23 @@ trait Notification
             }
             
             // Check if it's a test token
-            if (str_starts_with($token, 'test_fcm_token_')) {
-                Log::debug('Skipping test token', [
-                    'token_prefix' => substr($token, 0, 15) . '...',
-                    'length' => strlen($token),
-                    'user_id' => str_replace('test_fcm_token_', '', $token)
-                ]);
+            if (str_starts_with($token, 'test_fcm_token_') || str_starts_with($token, 'test_')) {
+                if ($allowTestTokens || $isTestEnv) {
+                    Log::debug('Accepting test token', [
+                        'token_prefix' => substr($token, 0, 15) . '...',
+                        'length' => strlen($token),
+                        'user_id' => str_replace('test_fcm_token_', '', $token),
+                        'FIREBASE_ALLOW_TEST_TOKENS' => $allowTestTokens ? 'true' : 'false'
+                    ]);
+                    $validatedTokens[] = $token;
+                } else {
+                    Log::debug('Skipping test token (not allowed in this environment)', [
+                        'token_prefix' => substr($token, 0, 15) . '...',
+                        'length' => strlen($token),
+                        'user_id' => str_replace('test_fcm_token_', '', $token),
+                        'FIREBASE_ALLOW_TEST_TOKENS' => 'false'
+                    ]);
+                }
                 continue;
             }
             
@@ -192,6 +211,11 @@ trait Notification
                 ]);
             }
         }
+        
+        Log::debug('Finished validating FCM tokens', [
+            'valid_tokens' => count($validatedTokens),
+            'total_processed' => count($tokens)
+        ]);
         
         return array_values(array_unique($validatedTokens));
     }
