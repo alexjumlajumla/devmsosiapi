@@ -68,17 +68,20 @@ class BroadcastService extends CoreService
             'custom_emailed' => 0,
         ];
 
-        $query->where(function ($q) {
-            $q->whereNotNull('email')->orWhereNotNull('firebase_token');
-        })->chunkById(500, function ($users) use ($payload, $channels, &$stats, $customEmails) {
+        $query->chunkById(500, function ($users) use ($payload, $channels, &$stats, $customEmails) {
             if (in_array('push', $channels)) {
-                $tokens   = [];
-                $userIds  = [];
-                foreach ($users as $u) {
-                    if (empty($u->firebase_token)) continue;
-                    $userIds[] = $u->id;
-                    $tokens = array_merge($tokens, is_array($u->firebase_token) ? $u->firebase_token : [$u->firebase_token]);
+                $tokens = [];
+                $userIds = [];
+                
+                foreach ($users as $user) {
+                    // Use the getFcmTokens() method which handles all token formats and validation
+                    $userTokens = $user->getFcmTokens();
+                    if (!empty($userTokens)) {
+                        $userIds[] = $user->id;
+                        $tokens = array_merge($tokens, $userTokens);
+                    }
                 }
+                
                 if (!empty($tokens)) {
                     $this->sendNotification(
                         $tokens,
@@ -92,6 +95,16 @@ class BroadcastService extends CoreService
                         $userIds,
                     );
                     $stats['pushed'] += count($tokens);
+                    
+                    \Log::info('Sent push notifications to users', [
+                        'user_count' => count($userIds),
+                        'token_count' => count($tokens),
+                        'title' => $payload['title']
+                    ]);
+                } else {
+                    \Log::warning('No valid FCM tokens found for any users in chunk', [
+                        'user_count' => $users->count()
+                    ]);
                 }
             }
 
