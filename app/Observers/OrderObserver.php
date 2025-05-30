@@ -12,7 +12,7 @@ use App\Traits\Notification;
 use DB;
 use Illuminate\Support\Facades\Log;
 use Psr\SimpleCache\InvalidArgumentException;
-use App\Services\OrderNotificationService;
+use App\Services\OrderNotificationService\OrderNotificationService;
 use Throwable;
 use App\Models\Trip;
 
