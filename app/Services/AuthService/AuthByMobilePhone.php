@@ -33,61 +33,116 @@ class AuthByMobilePhone extends CoreService
   
 	
 	
-	public function authentication(array $array): JsonResponse
+    public function authentication(array $array): JsonResponse
     {
-        $phone = preg_replace('/\D/', '', data_get($array, 'phone'));
-        $phone = str_contains($phone, '+') ? substr($phone, 1) : $phone;
-    
-        $user = $this->model()->where('phone', $phone)->first();
-    
-        if ($user) {
-            // Update existing user
-            $user->update([
-                'phone'         => $phone,
-                'ip_address'    => request()->ip(),
-                'auth_type'     => "phone",
-                // Only update firstname if it doesn't already exist
-                'firstname'     => $user->firstname ?: $phone,
-            ]);
+        try {
+            \Log::debug('Starting authentication', ['phone' => data_get($array, 'phone')]);
             
-            try {
-                // Check if user has any role, if not assign 'user' role
-                $roles = Role::pluck('name')->toArray();
-                if (empty($roles) || !$user->hasAnyRole($roles)) {
-                    $user->syncRoles('user');
-                }
-            } catch (\Exception $e) {
-                // If there's any error with roles, just log it and continue
-                \Log::error('Error assigning user role: ' . $e->getMessage());
-                $user->syncRoles('user');
+            $phone = preg_replace('/\D/', '', data_get($array, 'phone'));
+            $phone = str_contains($phone, '+') ? substr($phone, 1) : $phone;
+            
+            if (empty($phone)) {
+                throw new \Exception('Phone number is required');
             }
-        } else {
-            // Create new user with default 'user' role
-            $user = $this->model()->create([
-                'firstname'     => $phone,
-                'phone'         => $phone,
-                'ip_address'    => request()->ip(),
-                'auth_type'     => "phone"
+            
+            $user = $this->model()->where('phone', $phone)->first();
+            \Log::debug('User lookup result', ['phone' => $phone, 'user_found' => (bool)$user]);
+            
+            if ($user) {
+                // Update existing user
+                $updateData = [
+                    'phone'         => $phone,
+                    'ip_address'    => request()->ip(),
+                    'auth_type'     => "phone"
+                ];
+                
+                // Only update firstname if it doesn't already exist
+                if (empty($user->firstname)) {
+                    $updateData['firstname'] = $phone;
+                }
+                
+                $user->update($updateData);
+                \Log::debug('Updated existing user', ['user_id' => $user->id]);
+                
+                try {
+                    // Check if user has any role, if not assign 'user' role
+                    $roles = Role::pluck('name')->toArray();
+                    \Log::debug('Available roles', ['roles' => $roles]);
+                    
+                    if (empty($roles)) {
+                        throw new \Exception('No roles found in the database');
+                    }
+                    
+                    if (!$user->hasAnyRole($roles)) {
+                        $this->assignUserRole($user);
+                    }
+                } catch (\Exception $e) {
+                    \Log::error('Error in role assignment: ' . $e->getMessage(), [
+                        'user_id' => $user->id,
+                        'trace' => $e->getTraceAsString()
+                    ]);
+                    $this->assignUserRole($user);
+                }
+            } else {
+                // Create new user with default 'user' role
+                $userData = [
+                    'firstname'     => $phone,
+                    'phone'         => $phone,
+                    'ip_address'    => request()->ip(),
+                    'auth_type'     => "phone",
+                    'active'        => true,
+                    'phone_verified_at' => now()
+                ];
+                
+                $user = $this->model()->create($userData);
+                \Log::info('Created new user', ['user_id' => $user->id]);
+                
+                // Assign default 'user' role
+                $this->assignUserRole($user);
+            }
+            
+            if (!$user) {
+                throw new \Exception('Failed to create or update user');
+            }
+            
+            // Send SMS with verification code
+            $sms = (new SMSBaseService)->smsGateway($phone);
+            \Log::debug('SMS gateway response', $sms);
+            
+            if (!data_get($sms, 'status')) {
+                $errorMessage = data_get($sms, 'message', 'Failed to send verification code');
+                \Log::error('SMS Gateway Error', [
+                    'phone' => $phone,
+                    'error' => $errorMessage
+                ]);
+                
+                // Still return success but with a flag indicating SMS wasn't sent
+                return $this->successResponse(__('errors.' . ResponseError::SUCCESS, locale: $this->language), [
+                    'verifyId'  => null,
+                    'phone'     => $phone,
+                    'message'   => 'Verification code could not be sent. Please try again.',
+                    'sms_error' => $errorMessage
+                ]);
+            }
+            
+            return $this->successResponse(__('errors.' . ResponseError::SUCCESS, locale: $this->language), [
+                'verifyId'  => data_get($sms, 'verifyId'),
+                'phone'     => data_get($sms, 'phone'),
+                'message'   => data_get($sms, 'message', '')
             ]);
             
-            // Assign default 'user' role
-            $user->syncRoles('user');
-        }
-    
-        $sms = (new SMSBaseService)->smsGateway($phone);
-    
-        if (!data_get($sms, 'status')) {
+        } catch (\Exception $e) {
+            \Log::error('Authentication Error', [
+                'phone' => $phone ?? 'unknown',
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            
             return $this->onErrorResponse([
                 'code'    => ResponseError::ERROR_400,
-                'message' => data_get($sms, 'message', '')
+                'message' => $e->getMessage()
             ]);
         }
-    
-        return $this->successResponse(__('errors.' . ResponseError::SUCCESS, locale: $this->language), [
-            'verifyId'  => data_get($sms, 'verifyId'),
-            'phone'     => data_get($sms, 'phone'),
-            'message'   => data_get($sms, 'message', '')
-        ]);
     }
 
 	/**
@@ -416,7 +471,56 @@ class AuthByMobilePhone extends CoreService
      * @return void
      * @throws \Exception
      */
-    protected function ensureUserHasRole($user)
+    /**
+     * Assign the default 'user' role to a user
+     * 
+     * @param \App\Models\User $user
+     * @return void
+     * @throws \Exception
+     */
+    protected function assignUserRole($user): void
+    {
+        try {
+            if (!$user) {
+                throw new \Exception('User object is null');
+            }
+            
+            $defaultRole = Role::where('name', 'user')->first();
+            
+            if (!$defaultRole) {
+                // Create the default role if it doesn't exist
+                $defaultRole = Role::create([
+                    'name' => 'user',
+                    'guard_name' => 'api'
+                ]);
+                \Log::info('Created default user role');
+            }
+            
+            // Assign the role to the user
+            $user->syncRoles([$defaultRole->name]);
+            \Log::info('Assigned default role to user', [
+                'user_id' => $user->id,
+                'role' => $defaultRole->name
+            ]);
+            
+        } catch (\Exception $e) {
+            \Log::error('Error in assignUserRole', [
+                'user_id' => $user->id ?? 'unknown',
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            throw $e;
+        }
+    }
+    
+    /**
+     * Ensure the user has a default role assigned
+     * 
+     * @param \App\Models\User $user
+     * @return void
+     * @throws \Exception
+     */
+    protected function ensureUserHasRole($user): void
     {
         try {
             if (!$user) {
@@ -425,24 +529,10 @@ class AuthByMobilePhone extends CoreService
             
             // Check if user has any roles
             if ($user->roles->isEmpty()) {
-                // Get the default role (usually 'user')
-                $defaultRole = Role::where('name', 'user')->first();
-                
-                if (!$defaultRole) {
-                    // Create the default role if it doesn't exist
-                    $defaultRole = Role::create(['name' => 'user', 'guard_name' => 'api']);
-                    \Log::info('Created default user role');
-                }
-                
-                // Assign the role to the user
-                $user->syncRoles([$defaultRole->name]);
-                \Log::info('Assigned default role to user', [
-                    'user_id' => $user->id,
-                    'role' => $defaultRole->name
-                ]);
+                $this->assignUserRole($user);
             }
         } catch (\Exception $e) {
-            \Log::error('Error ensuring user role', [
+            \Log::error('Error in ensureUserHasRole', [
                 'user_id' => $user->id ?? 'unknown',
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
