@@ -50,8 +50,15 @@ class AuthByMobilePhone extends CoreService
                 'firstname'     => $user->firstname ?: $phone,
             ]);
             
-            // Ensure existing user has at least the 'user' role
-            if (!$user->hasAnyRole(Role::query()->pluck('name')->toArray())) {
+            try {
+                // Check if user has any role, if not assign 'user' role
+                $roles = Role::pluck('name')->toArray();
+                if (empty($roles) || !$user->hasAnyRole($roles)) {
+                    $user->syncRoles('user');
+                }
+            } catch (\Exception $e) {
+                // If there's any error with roles, just log it and continue
+                \Log::error('Error assigning user role: ' . $e->getMessage());
                 $user->syncRoles('user');
             }
         } else {
@@ -188,7 +195,15 @@ class AuthByMobilePhone extends CoreService
             ]);
         }
 
-        if (!$user->hasAnyRole(Role::query()->pluck('name')->toArray())) {
+        try {
+            // Check if user has any role, if not assign 'user' role
+            $roles = Role::pluck('name')->toArray();
+            if (empty($roles) || !$user->hasAnyRole($roles)) {
+                $user->syncRoles('user');
+            }
+        } catch (\Exception $e) {
+            // If there's any error with roles, just log it and continue
+            \Log::error('Error assigning user role in confirmOPTCode: ' . $e->getMessage());
             $user->syncRoles('user');
         }
 
