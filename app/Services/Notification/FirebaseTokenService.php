@@ -62,6 +62,15 @@ class FirebaseTokenService
         if (empty($token) || !is_string($token)) {
             return false;
         }
+
+        // In development, accept test tokens
+        if (app()->environment('local', 'development') && 
+            (str_starts_with($token, 'test_fcm_token_') || str_starts_with($token, 'test_'))) {
+            Log::debug('Accepting test FCM token in development', [
+                'token_prefix' => substr($token, 0, 10) . '...'
+            ]);
+            return true;
+        }
         
         // FCM tokens are typically 152-163 characters long
         $length = strlen($token);
@@ -175,33 +184,12 @@ class FirebaseTokenService
      * @param string $token
      * @return bool
      */
+    /**
+     * Alias for isFcmTokenValid for backward compatibility
+     */
     public function isValidFcmToken(string $token): bool
     {
-        // Basic validation
-        if (empty($token) || !is_string($token)) {
-            return false;
-        }
-        
-        // FCM tokens are typically 152-163 characters long
-        $length = strlen($token);
-        if ($length < 100 || $length > 200) {
-            Log::debug('FCM token has invalid length', [
-                'length' => $length,
-                'token_prefix' => substr($token, 0, 10) . '...'
-            ]);
-            return false;
-        }
-        
-        // Check token format (alphanumeric, underscore, hyphen, colon)
-        if (!preg_match('/^[a-zA-Z0-9_\-:]+$/', $token)) {
-            Log::debug('FCM token has invalid format', [
-                'token_prefix' => substr($token, 0, 10) . '...',
-                'length' => $length
-            ]);
-            return false;
-        }
-        
-        return true;
+        return $this->isFcmTokenValid($token);
     }
     
     /**
