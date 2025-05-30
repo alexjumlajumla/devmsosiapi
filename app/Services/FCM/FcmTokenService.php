@@ -598,11 +598,13 @@ class FcmTokenService
         }
         
         return $isValid;
+    }
+    
     /**
      * Check if a token is valid (alias for isValidFcmToken for backward compatibility)
      * 
-     * @param string $token
-     * @return bool
+     * @param string $token The FCM token to validate
+     * @return bool Returns true if the token is valid, false otherwise
      */
     public function isValidToken(string $token): bool
     {
