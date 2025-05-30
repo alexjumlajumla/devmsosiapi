@@ -195,16 +195,26 @@ class AuthByMobilePhone extends CoreService
             ]);
         }
 
-        try {
-            // Check if user has any role, if not assign 'user' role
-            $roles = Role::pluck('name')->toArray();
-            if (empty($roles) || !$user->hasAnyRole($roles)) {
-                $user->syncRoles('user');
+        if ($user) {
+            try {
+                // Check if user has any role, if not assign 'user' role
+                $roles = Role::pluck('name')->toArray();
+                if (empty($roles) || !$user->hasAnyRole($roles)) {
+                    $user->syncRoles('user');
+                }
+            } catch (\Exception $e) {
+                // If there's any error with roles, just log it and continue
+                \Log::error('Error assigning user role in confirmOPTCode: ' . $e->getMessage());
+                if ($user) {
+                    $user->syncRoles('user');
+                }
             }
-        } catch (\Exception $e) {
-            // If there's any error with roles, just log it and continue
-            \Log::error('Error assigning user role in confirmOPTCode: ' . $e->getMessage());
-            $user->syncRoles('user');
+        } else {
+            \Log::error('Cannot assign roles: User object is null in confirmOPTCode');
+            return $this->onErrorResponse([
+                'code'    => ResponseError::ERROR_404,
+                'message' => 'User not found',
+            ]);
         }
 
         if(empty($user->wallet?->uuid)) {
