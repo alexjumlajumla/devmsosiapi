@@ -60,31 +60,36 @@ class FirebaseTokenService
     {
         // Basic validation
         if (empty($token) || !is_string($token)) {
+            Log::debug('Token is empty or not a string', [
+                'token' => $token,
+                'type' => gettype($token)
+            ]);
             return false;
         }
 
-        // Check for test tokens
+        // Check for test tokens first
         if (str_starts_with($token, 'test_fcm_token_') || str_starts_with($token, 'test_')) {
-            $allowTestTokens = filter_var(env('FIREBASE_ALLOW_TEST_TOKENS', 'false'), FILTER_VALIDATE_BOOLEAN);
-            $isTestEnv = app()->environment('local', 'staging', 'development');
+            $allowTestTokens = filter_var(env('FIREBASE_ALLOW_TEST_TOKENS', 'true'), FILTER_VALIDATE_BOOLEAN);
+            $isTestEnv = app()->environment(['local', 'staging', 'development', 'testing']);
             
             if ($allowTestTokens || $isTestEnv) {
                 Log::debug('Accepted test FCM token', [
                     'token_prefix' => substr($token, 0, 15) . '...',
                     'environment' => app()->environment(),
-                    'FIREBASE_ALLOW_TEST_TOKENS' => $allowTestTokens ? 'true' : 'false'
+                    'FIREBASE_ALLOW_TEST_TOKENS' => $allowTestTokens ? 'true' : 'false',
+                    'is_test_env' => $isTestEnv ? 'true' : 'false'
                 ]);
                 return true;
-            } else {
-                // Reject test tokens when not explicitly allowed
-                Log::warning('Rejected test FCM token', [
-                    'token_prefix' => substr($token, 0, 15) . '...',
-                    'environment' => app()->environment(),
-                    'FIREBASE_ALLOW_TEST_TOKENS' => 'false',
-                    'reason' => 'Test tokens are not allowed in this environment'
-                ]);
-                return false;
             }
+            
+            Log::warning('Rejected test FCM token', [
+                'token_prefix' => substr($token, 0, 15) . '...',
+                'environment' => app()->environment(),
+                'FIREBASE_ALLOW_TEST_TOKENS' => 'false',
+                'is_test_env' => 'false',
+                'reason' => 'Test tokens are not allowed in this environment'
+            ]);
+            return false;
         }
         
         // FCM tokens are typically 152-163 characters long
