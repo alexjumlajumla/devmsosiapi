@@ -129,7 +129,17 @@ class OrderObserver
             Log::error('Error creating trip for order #' . $order->id . ': ' . $e->getMessage());
         }
 
-        // (new OrderNotificationService)->sendOrderNotification($order, 'created');
+        try {
+            // Send order notification
+            (new OrderNotificationService)->sendOrderNotification($order, 'created');
+            Log::info('Order notification sent', ['order_id' => $order->id]);
+        } catch (\Exception $e) {
+            Log::error('Failed to send order notification', [
+                'order_id' => $order->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+        }
 
         (new ModelLogService)->logging($order, $order->getAttributes(), 'created');
     }

@@ -99,44 +99,49 @@
             <h1>Order Update</h1>
         </div>
         <div class="content">
-            <p>Dear {{ $order->user?->firstname }},</p>
-            <p>{{ $message }}</p>
+            @if($order)
+                <p>Dear {{ $order->user?->firstname }},</p>
+                <p>{{ $message }}</p>
 
-            <div class="order-info">
-                <h2>Order Details</h2>
-                <div class="info-row">
-                    <span class="label">Order ID:</span>
-                    <span class="value">#{{ $order->id }}</span>
+                <div class="order-info">
+                    <h2>Order Details</h2>
+                    <div class="info-row">
+                        <span class="label">Order ID:</span>
+                        <span class="value">#{{ $order->id }}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="label">Order Date:</span>
+                        <span class="value">{{ $order->created_at->format('M d, Y H:i') }}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="label">Status:</span>
+                        <span class="status">{{ ucfirst($order->status) }}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="label">Total Amount:</span>
+                        <span class="value">{{ $order->currency?->symbol }}{{ number_format($order->total_price, 2) }}</span>
+                    </div>
+                    @if($order->delivery_date)
+                    <div class="info-row">
+                        <span class="label">Delivery Date:</span>
+                        <span class="value">{{ $order->delivery_date->format('M d, Y') }}</span>
+                    </div>
+                    @endif
+                    @if($order->delivery_time)
+                    <div class="info-row">
+                        <span class="label">Delivery Time:</span>
+                        <span class="value">{{ $order->delivery_time }}</span>
+                    </div>
+                    @endif
                 </div>
-                <div class="info-row">
-                    <span class="label">Order Date:</span>
-                    <span class="value">{{ $order->created_at->format('M d, Y H:i') }}</span>
-                </div>
-                <div class="info-row">
-                    <span class="label">Status:</span>
-                    <span class="status">{{ ucfirst($order->status) }}</span>
-                </div>
-                <div class="info-row">
-                    <span class="label">Total Amount:</span>
-                    <span class="value">{{ $order->currency?->symbol }}{{ number_format($order->total_price, 2) }}</span>
-                </div>
-                @if($order->delivery_date)
-                <div class="info-row">
-                    <span class="label">Delivery Date:</span>
-                    <span class="value">{{ $order->delivery_date->format('M d, Y') }}</span>
-                </div>
-                @endif
-                @if($order->delivery_time)
-                <div class="info-row">
-                    <span class="label">Delivery Time:</span>
-                    <span class="value">{{ $order->delivery_time }}</span>
-                </div>
-                @endif
-            </div>
 
-            <div style="text-align: center;">
-                <a href="{{ config('app.url') }}/orders/{{ $order->id }}" class="button">View Order Details</a>
-            </div>
+                <div style="text-align: center;">
+                    <a href="{{ config('app.url') }}/orders/{{ $order->id }}" class="button">View Order Details</a>
+                </div>
+            @else
+                <p>Hello,</p>
+                <p>{{ $message }}</p>
+            @endif
 
             <p class="help-text">
                 If you have any questions about your order, please don't hesitate to contact our customer support team.
