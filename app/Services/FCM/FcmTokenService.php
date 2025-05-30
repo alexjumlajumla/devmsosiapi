@@ -484,22 +484,28 @@ class FcmTokenService
             return false;
         }
 
-        // Allow test tokens in non-production environments
-        if (app()->environment('local', 'staging', 'development')) {
-            if (str_starts_with($token, 'test_fcm_token_') || str_starts_with($token, 'test_')) {
-                \Log::debug('Accepted test FCM token in non-production environment', [
+        // Check for test tokens
+        if (str_starts_with($token, 'test_fcm_token_') || str_starts_with($token, 'test_')) {
+            $allowTestTokens = filter_var(env('FIREBASE_ALLOW_TEST_TOKENS', 'false'), FILTER_VALIDATE_BOOLEAN);
+            $isTestEnv = app()->environment('local', 'staging', 'development');
+            
+            if ($allowTestTokens || $isTestEnv) {
+                \Log::debug('Accepted test FCM token', [
                     'token_prefix' => substr($token, 0, 15) . '...',
-                    'environment' => app()->environment()
+                    'environment' => app()->environment(),
+                    'FIREBASE_ALLOW_TEST_TOKENS' => $allowTestTokens ? 'true' : 'false'
                 ]);
                 return true;
+            } else {
+                // Reject test tokens in production when not explicitly allowed
+                \Log::warning('Rejected test FCM token', [
+                    'token_prefix' => substr($token, 0, 15) . '...',
+                    'environment' => app()->environment(),
+                    'FIREBASE_ALLOW_TEST_TOKENS' => 'false',
+                    'reason' => 'Test tokens are not allowed in this environment'
+                ]);
+                return false;
             }
-        } else if (str_starts_with($token, 'test_fcm_token_') || str_starts_with($token, 'test_')) {
-            // Reject test tokens in production
-            \Log::warning('Rejected test FCM token in production', [
-                'token_prefix' => substr($token, 0, 15) . '...',
-                'reason' => 'Test tokens are not allowed in production environment'
-            ]);
-            return false;
         }
 
         // Basic validation for FCM token format

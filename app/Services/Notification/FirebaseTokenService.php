@@ -63,17 +63,28 @@ class FirebaseTokenService
             return false;
         }
 
-        // Check if test tokens should be allowed (for testing in production)
-        $allowTestTokens = config('firebase.allow_test_tokens', false);
-        
-        if (($allowTestTokens || app()->environment('local', 'development')) && 
-            (str_starts_with($token, 'test_fcm_token_') || str_starts_with($token, 'test_'))) {
-            Log::debug('Accepting test FCM token', [
-                'token_prefix' => substr($token, 0, 10) . '...',
-                'environment' => app()->environment(),
-                'allow_test_tokens' => $allowTestTokens
-            ]);
-            return true;
+        // Check for test tokens
+        if (str_starts_with($token, 'test_fcm_token_') || str_starts_with($token, 'test_')) {
+            $allowTestTokens = filter_var(env('FIREBASE_ALLOW_TEST_TOKENS', 'false'), FILTER_VALIDATE_BOOLEAN);
+            $isTestEnv = app()->environment('local', 'staging', 'development');
+            
+            if ($allowTestTokens || $isTestEnv) {
+                Log::debug('Accepted test FCM token', [
+                    'token_prefix' => substr($token, 0, 15) . '...',
+                    'environment' => app()->environment(),
+                    'FIREBASE_ALLOW_TEST_TOKENS' => $allowTestTokens ? 'true' : 'false'
+                ]);
+                return true;
+            } else {
+                // Reject test tokens when not explicitly allowed
+                Log::warning('Rejected test FCM token', [
+                    'token_prefix' => substr($token, 0, 15) . '...',
+                    'environment' => app()->environment(),
+                    'FIREBASE_ALLOW_TEST_TOKENS' => 'false',
+                    'reason' => 'Test tokens are not allowed in this environment'
+                ]);
+                return false;
+            }
         }
         
         // FCM tokens are typically 152-163 characters long
