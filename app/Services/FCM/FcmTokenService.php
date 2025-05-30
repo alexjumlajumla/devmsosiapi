@@ -376,11 +376,59 @@ class FcmTokenService
             ];
         }
         
+        $allowTestTokens = filter_var(env('FIREBASE_ALLOW_TEST_TOKENS', 'false'), FILTER_VALIDATE_BOOLEAN);
+        $isTestEnv = app()->environment('local', 'staging', 'development');
+        
+        // If we're allowing test tokens, filter them out and just log them
+        $testTokens = [];
+        $realTokens = [];
+        
+        foreach ($tokens as $token) {
+            if (str_starts_with($token, 'test_fcm_token_') || str_starts_with($token, 'test_')) {
+                $testTokens[] = $token;
+            } else {
+                $realTokens[] = $token;
+            }
+        }
+        
+        // Handle test tokens
+        if (!empty($testTokens) && ($allowTestTokens || $isTestEnv)) {
+            $this->log('info', 'Skipping FCM send for test tokens', [
+                'test_token_count' => count($testTokens),
+                'test_tokens_sample' => array_slice($testTokens, 0, 3)
+            ]);
+            
+            // Return success for test tokens
+            return [
+                'success' => true,
+                'message' => 'Test tokens processed (not sent to FCM)',
+                'sent' => count($testTokens),
+                'failed' => 0,
+                'invalid_tokens' => [],
+                'is_test' => true
+            ];
+        }
+        
         $messaging = app('firebase.messaging');
         $responses = [];
         $invalidTokens = [];
         $sentCount = 0;
         $failedCount = 0;
+        
+        // Only process real tokens
+        $tokens = $realTokens;
+        
+        // If no real tokens to process, return early
+        if (empty($tokens)) {
+            return [
+                'success' => true,
+                'message' => 'No real FCM tokens to process',
+                'sent' => 0,
+                'failed' => 0,
+                'invalid_tokens' => [],
+                'is_test' => !empty($testTokens)
+            ];
+        }
         
         // Process in chunks to avoid hitting FCM limits
         $chunks = array_chunk($tokens, 500);
