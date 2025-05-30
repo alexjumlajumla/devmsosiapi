@@ -27,7 +27,7 @@ class FcmTokenService
     public function addToken(User $user, string $token): bool
     {
         try {
-            if (!$this->isValidFcmToken($token)) {
+            if (!$this->validateAndFilterTokens([$token])) {
                 $this->log('warning', 'Invalid FCM token format', ['token' => $token]);
                 return false;
             }
@@ -372,32 +372,23 @@ class FcmTokenService
                 'sent' => 0,
                 'failed' => 0,
                 'invalid_tokens' => [],
-                'is_test' => false
+                'is_test' => true,
+                'responses' => $testResponses
             ];
         }
-
-        // Check for test tokens and environment settings
-        $isTestEnv = app()->environment('local', 'staging', 'development');
-        $allowTestTokens = filter_var(env('FIREBASE_ALLOW_TEST_TOKENS', 'true'), FILTER_VALIDATE_BOOLEAN);
         
-        // Filter out test tokens if not allowed
-        $testTokens = [];
-        $validTokens = [];
+        // Process real tokens and combine with test responses
+        $realResponse = $this->sendToFcm($validTokens, $message);
         
-        foreach ($tokens as $token) {
-            if (is_string($token) && (str_starts_with($token, 'test_fcm_token_') || str_starts_with($token, 'test_'))) {
-                $testTokens[] = $token;
-            } else if (!empty($token)) {
-                $validTokens[] = $token;
-            }
-        }
-        
-        // Handle test tokens in test environments
-        if ($isTestEnv && $allowTestTokens && !empty($testTokens)) {
-            $this->log('info', 'Processing test tokens in test environment', [
-                'test_token_count' => count($testTokens),
-                'valid_token_count' => count($validTokens),
-                'test_token_sample' => !empty($testTokens) ? substr($testTokens[0], 0, 15) . '...' : 'none',
+        return [
+            'success' => $realResponse['success'],
+            'message' => 'Mixed tokens processed',
+            'sent' => $realResponse['sent'] + count($testTokens),
+            'failed' => $realResponse['failed'],
+            'invalid_tokens' => $realResponse['invalid_tokens'],
+            'responses' => array_merge($testResponses, $realResponse['responses'] ?? []),
+            'is_mixed' => true
+        ];
             ]);
             
             // Simulate success for test tokens

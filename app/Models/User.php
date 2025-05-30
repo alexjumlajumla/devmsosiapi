@@ -621,7 +621,8 @@ class User extends Authenticatable implements MustVerifyEmail
                 'is_null' => is_null($token),
                 'token_sample' => is_string($token) ? (strlen($token) > 10 ? substr($token, 0, 10) . '...' : $token) : 'N/A',
                 'token_length' => is_string($token) ? strlen($token) : 0,
-                'user_id' => $this->id
+                'user_id' => $this->id,
+                'environment' => config('app.env')
             ]);
 
             // Check if token is a non-empty string
@@ -634,32 +635,64 @@ class User extends Authenticatable implements MustVerifyEmail
                 return false;
             }
             
-            // Accept test tokens (starting with 'test_fcm_token_' or 'test_')
-            if (str_starts_with($token, 'test_fcm_token_') || str_starts_with($token, 'test_')) {
-                \Log::debug('Accepted test FCM token', [
+            // Get environment configuration
+            $isTestEnvironment = config('app.env') !== 'production';
+            $allowTestTokens = config('services.firebase.allow_test_tokens', true);
+            
+            // Accept test tokens in non-production environments if allowed
+            if (($isTestEnvironment && $allowTestTokens) && 
+                (str_starts_with($token, 'test_fcm_token_') || str_starts_with($token, 'test_'))) {
+                \Log::debug('Accepted test FCM token in test environment', [
                     'token_prefix' => substr($token, 0, 15) . '...',
                     'length' => strlen($token),
-                    'user_id' => $this->id
+                    'user_id' => $this->id,
+                    'environment' => config('app.env'),
+                    'allow_test_tokens' => $allowTestTokens
                 ]);
                 return true;
             }
             
-            // Check token length (be more lenient with length requirements)
-            $length = strlen($token);
-            if ($length < 50) {  // Reduced from 100 to 50
-                \Log::debug('FCM token too short', [
-                    'length' => $length,
-                    'token_prefix' => substr($token, 0, 10) . '...',
-                    'user_id' => $this->id
+            // In production, reject test tokens
+            if (str_starts_with($token, 'test_')) {
+                \Log::warning('Rejecting test token in production', [
+                    'token_prefix' => substr($token, 0, 15) . '...',
+                    'user_id' => $this->id,
+                    'environment' => config('app.env')
                 ]);
                 return false;
             }
             
-            // Log the token as potentially valid
-            \Log::debug('Accepted FCM token', [
+            // Check token format (basic validation for real FCM tokens)
+            // Real FCM tokens are typically much longer and follow a specific format
+            $length = strlen($token);
+            
+            // Minimum length check (FCM tokens are usually 150+ characters)
+            if ($length < 100) {
+                \Log::debug('FCM token too short', [
+                    'length' => $length,
+                    'token_prefix' => substr($token, 0, 10) . '...',
+                    'user_id' => $this->id,
+                    'environment' => config('app.env')
+                ]);
+                return false;
+            }
+            
+            // Check for common FCM token patterns
+            if (!preg_match('/^[a-zA-Z0-9_\-:]+$/', $token)) {
+                \Log::debug('FCM token contains invalid characters', [
+                    'token_prefix' => substr($token, 0, 10) . '...',
+                    'user_id' => $this->id,
+                    'environment' => config('app.env')
+                ]);
+                return false;
+            }
+            
+            // Log the token as valid
+            \Log::debug('Accepted valid FCM token', [
                 'token_prefix' => substr($token, 0, 10) . '...',
                 'length' => $length,
-                'user_id' => $this->id
+                'user_id' => $this->id,
+                'environment' => config('app.env')
             ]);
             
             return true;

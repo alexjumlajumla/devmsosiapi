@@ -49,17 +49,32 @@ class BroadcastService extends CoreService
 
         $query = User::query();
 
-        // Users with specific roles
-        if (!empty($roleGroups)) {
-            $query->whereHas('roles', function ($q) use ($roleGroups) {
-                $q->whereIn('name', $roleGroups);
-            });
-        }
-
-        // Include plain customers without any specific role when "user" requested
-        if (in_array('user', $groups)) {
-            $query->orWhereDoesntHave('roles');
-        }
+        // Build the query to include users with specific roles and/or regular users
+        $query->where(function($q) use ($roleGroups, $groups) {
+            // Include users with specific roles if any role groups are specified
+            if (!empty($roleGroups)) {
+                $q->whereHas('roles', function($roleQuery) use ($roleGroups) {
+                    $roleQuery->whereIn('name', $roleGroups);
+                });
+            }
+            
+            // Include users without any roles when 'user' is in groups
+            if (in_array('user', $groups)) {
+                if (!empty($roleGroups)) {
+                    $q->orWhereDoesntHave('roles');
+                } else {
+                    $q->whereDoesntHave('roles');
+                }
+            }
+        });
+        
+        // Log the query for debugging
+        \Log::debug('Broadcast user query', [
+            'sql' => $query->toSql(),
+            'bindings' => $query->getBindings(),
+            'role_groups' => $roleGroups,
+            'all_groups' => $groups
+        ]);
 
         $stats = [
             'emailed' => 0,
