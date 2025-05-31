@@ -814,19 +814,23 @@ trait Notification
                 'shop_exists' => (bool) \App\Models\Shop::find($order->shop_id)
             ]);
 
-            // Get all admin users with debug info
+            // Get all admin and manager users with debug info
+            $adminRoles = ['admin', 'manager']; // Include both admin and manager roles
             $allAdmins = \App\Models\User::with('roles')
-                ->whereHas('roles', fn($q) => $q->where('name', 'admin'))
-                ->get(['id', 'firebase_token']);
+                ->whereHas('roles', fn($q) => $q->whereIn('name', $adminRoles))
+                ->get(['id', 'firebase_token', 'firstname', 'lastname', 'email']);
 
-            Log::debug('All admin users', [
+            Log::debug('All admin/manager users', [
                 'total_admins' => $allAdmins->count(),
                 'admins_with_tokens' => $allAdmins->whereNotNull('firebase_token')->count(),
                 'admin_ids' => $allAdmins->pluck('id')->toArray(),
-                'admin_tokens' => $allAdmins->map(fn($admin) => [
+                'admin_details' => $allAdmins->map(fn($admin) => [
                     'user_id' => $admin->id,
+                    'name' => trim($admin->firstname . ' ' . $admin->lastname),
+                    'email' => $admin->email,
                     'has_token' => !empty($admin->firebase_token),
-                    'token_type' => gettype($admin->firebase_token)
+                    'token_type' => gettype($admin->firebase_token),
+                    'roles' => $admin->roles->pluck('name')->toArray()
                 ])
             ]);
 
@@ -843,23 +847,31 @@ trait Notification
                 }
             }
 
-            Log::debug('Processed admin tokens', [
+            Log::debug('Processed admin/manager tokens', [
                 'admin_count' => count($adminFirebaseTokens),
                 'admin_ids' => array_keys($adminFirebaseTokens),
                 'total_tokens' => array_sum(array_map('count', $adminFirebaseTokens))
             ]);
 
             // Get seller tokens for the specific shop
+            $sellerRoles = ['seller', 'waiter', 'cook']; // Include all seller-related roles
             $allSellers = \App\Models\User::with(['roles', 'shop'])
-                ->whereHas('roles', fn($q) => $q->where('name', 'seller'))
+                ->whereHas('roles', fn($q) => $q->whereIn('name', $sellerRoles))
                 ->whereHas('shop', fn($q) => $q->where('id', $order->shop_id))
-                ->get(['id', 'firebase_token']);
+                ->get(['id', 'firebase_token', 'firstname', 'lastname', 'email']);
 
-            Log::debug('All seller users for shop', [
+            Log::debug('All seller-related users for shop', [
                 'shop_id' => $order->shop_id,
                 'total_sellers' => $allSellers->count(),
                 'sellers_with_tokens' => $allSellers->whereNotNull('firebase_token')->count(),
-                'seller_ids' => $allSellers->pluck('id')->toArray()
+                'seller_details' => $allSellers->map(fn($seller) => [
+                    'user_id' => $seller->id,
+                    'name' => trim($seller->firstname . ' ' . $seller->lastname),
+                    'email' => $seller->email,
+                    'has_token' => !empty($seller->firebase_token),
+                    'token_type' => gettype($seller->firebase_token),
+                    'roles' => $seller->roles->pluck('name')->toArray()
+                ])
             ]);
 
             $sellersFirebaseTokens = [];
@@ -870,6 +882,13 @@ trait Notification
                 
                 if (!empty($tokens)) {
                     $sellersFirebaseTokens[$user->id] = $tokens;
+                    
+                    Log::debug('Processing seller tokens', [
+                        'user_id' => $user->id,
+                        'token_count' => count($tokens),
+                        'token_sample' => !empty($tokens) ? substr($tokens[0], 0, 10) . '...' : 'none',
+                        'roles' => $user->roles->pluck('name')->toArray()
+                    ]);
                 }
             }
 
