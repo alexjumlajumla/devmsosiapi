@@ -13,19 +13,48 @@ use Exception;
 
 class VfdService extends CoreService
 {
-    protected string $baseUrl;
-    protected string $apiKey;
-    protected string $tin;
-    protected string $certPath;
+    protected ?string $baseUrl = null;
+    protected ?string $apiKey = null;
+    protected ?string $tin = null;
+    protected ?string $certPath = null;
+    protected bool $isSandbox = true;
 
     public function __construct()
     {
         parent::__construct();
         
-        $this->baseUrl = config('services.vfd.base_url');
-        $this->apiKey = config('services.vfd.api_key');
-        $this->tin = config('services.vfd.tin');
-        $this->certPath = config('services.vfd.cert_path');
+        try {
+            $this->isSandbox = (bool) config('services.vfd.sandbox', true);
+            $this->baseUrl = rtrim((string) config('services.vfd.base_url', ''), '/');
+            $this->apiKey = (string) config('services.vfd.api_key', '');
+            $this->tin = (string) config('services.vfd.tin', '');
+            
+            if (!$this->isSandbox) {
+                $this->certPath = (string) config('services.vfd.cert_path', '');
+                if (!file_exists($this->certPath)) {
+                    throw new \RuntimeException('VFD certificate not found at: ' . $this->certPath);
+                }
+            } else {
+                $this->certPath = null;
+            }
+            
+            // Set default sandbox values if in sandbox mode and no values provided
+            if ($this->isSandbox) {
+                $this->baseUrl = $this->baseUrl ?: 'https://vfd-sandbox.mojatax.com';
+                $this->apiKey = $this->apiKey ?: 'sandbox_test_key_123456';
+                $this->tin = $this->tin ?: '123456789';
+            }
+        } catch (\Exception $e) {
+            // If we're in sandbox mode, continue with defaults
+            if ($this->isSandbox) {
+                $this->baseUrl = 'https://vfd-sandbox.mojatax.com';
+                $this->apiKey = 'sandbox_test_key_123456';
+                $this->tin = '123456789';
+                $this->certPath = null;
+            } else {
+                throw $e;
+            }
+        }
     }
     
     /**
@@ -36,6 +65,14 @@ class VfdService extends CoreService
     public function testConnection(): array
     {
         try {
+            if ($this->isSandbox) {
+                return [
+                    'success' => true,
+                    'message' => 'Sandbox mode: Connection test skipped',
+                    'sandbox' => true
+                ];
+            }
+            
             $response = Http::withHeaders([
                 'Authorization' => "Bearer {$this->apiKey}",
                 'Accept' => 'application/json',

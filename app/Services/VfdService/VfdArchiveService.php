@@ -13,21 +13,35 @@ class VfdArchiveService
      *
      * @var string
      */
-    protected $endpoint;
+    protected ?string $endpoint = null;
     
     /**
      * The archive API key
      *
-     * @var string
+     * @var string|null
      */
-    protected $apiKey;
+    protected ?string $apiKey = null;
     
     /**
      * Whether to verify SSL certificates
      *
      * @var bool
      */
-    protected $verifySsl;
+    protected bool $verifySsl = true;
+    
+    /**
+     * Whether archive service is enabled
+     *
+     * @var bool
+     */
+    protected bool $enabled = false;
+    
+    /**
+     * Whether to use sandbox mode
+     *
+     * @var bool
+     */
+    protected bool $sandbox = true;
     
     /**
      * Create a new VfdArchiveService instance
@@ -36,9 +50,20 @@ class VfdArchiveService
      */
     public function __construct()
     {
-        $this->endpoint = rtrim(config('services.vfd.archive_endpoint', ''), '/');
-        $this->apiKey = config('services.vfd.archive_api_key');
-        $this->verifySsl = (bool) config('services.vfd.archive_verify_ssl', true);
+        $this->enabled = (bool) config('services.vfd.archive_enabled', false);
+        $this->sandbox = (bool) config('services.vfd.sandbox', true);
+        
+        if ($this->enabled || $this->sandbox) {
+            $this->endpoint = rtrim((string) config('services.vfd.archive_endpoint', ''), '/');
+            $this->apiKey = (string) config('services.vfd.archive_api_key', '');
+            $this->verifySsl = (bool) config('services.vfd.archive_verify_ssl', !$this->sandbox);
+        }
+        
+        // In sandbox mode, provide a mock endpoint if none is set
+        if ($this->sandbox && empty($this->endpoint)) {
+            $this->endpoint = 'https://vfd-sandbox.mojatax.com/api/archive';
+            $this->apiKey = $this->apiKey ?: 'sandbox_archive_key_123456';
+        }
     }
     
     /**
@@ -49,6 +74,23 @@ class VfdArchiveService
      */
     public function syncReceipt(VfdReceipt $receipt): array
     {
+        if (!$this->enabled && !$this->sandbox) {
+            return [
+                'success' => true,
+                'message' => 'Archive service is disabled',
+                'skipped' => true
+            ];
+        }
+        
+        if ($this->sandbox) {
+            return [
+                'success' => true,
+                'message' => 'Sandbox: Receipt archived successfully',
+                'sandbox' => true,
+                'receipt_id' => $receipt->id,
+                'receipt_number' => $receipt->receipt_number
+            ];
+        }
         if (empty($this->endpoint) || empty($this->apiKey)) {
             return [
                 'success' => false,

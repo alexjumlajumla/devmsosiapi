@@ -4,11 +4,12 @@ return [
     // ... existing code ...
 
     'vfd' => [
-        // API Settings
-        'base_url' => env('VFD_BASE_URL', 'https://api.vfd.tz'),
-        'api_key' => env('VFD_API_KEY'),
-        'tin' => env('VFD_TIN'),
-        'cert_path' => env('VFD_CERT_PATH', storage_path('certs/vfd/cert.pem')),
+        // VFD API Configuration - Sandbox
+        'base_url' => env('VFD_BASE_URL', 'https://vfd-sandbox.mojatax.com/'),
+        'api_key' => env('VFD_API_KEY', 'sandbox_test_key_123456'),
+        'tin' => env('VFD_TIN', '123456789'),
+        'cert_path' => env('VFD_CERT_PATH', storage_path('certs/vfd/sandbox_cert.pem')),
+        'sandbox' => env('VFD_SANDBOX', true),
         'timeout' => 30,
         'retry_attempts' => 3,
         'retry_delay' => 5, // seconds
