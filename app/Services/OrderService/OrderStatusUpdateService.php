@@ -410,46 +410,69 @@ class OrderStatusUpdateService extends CoreService
         }
     }
 
+    /**
+     * Send status update notification to the order's user
+     * 
+     * @param Order $order
+     * @param string $status
+     * @param string $title
+     * @param string $body
+     * @return void
+     */
     private function sendStatusNotification(Order $order, string $status, string $title, string $body)
     {
         try {
             $firebaseTokens = [];
             $userIds = [];
 
-            // Check if user has a valid firebase token and collect it
-            if ($order->user && !empty($order->user->firebase_token)) {
-                if (is_array($order->user->firebase_token)) {
-                    foreach ($order->user->firebase_token as $token) {
-                        if (!empty($token)) {
-                            $firebaseTokens[] = $token;
-                        }
-                    }
-                } elseif (is_string($order->user->firebase_token) && !empty($order->user->firebase_token)) {
-                    $firebaseTokens[] = $order->user->firebase_token;
-                }
+            // Get the user and their FCM tokens using the EnhancedFcmTokenService
+            if ($order->user) {
+                $user = $order->user;
+                $fcmService = app(\App\Services\FCM\FcmTokenService::class);
+                $tokens = $fcmService->getUserTokens($user);
                 
-                if (!empty($firebaseTokens)) {
-                    $userIds[] = $order->user->id;
+                if (!empty($tokens)) {
+                    $firebaseTokens = $tokens;
+                    $userIds[] = $user->id;
+                    
+                    Log::channel('orders')->info('Found FCM tokens for order notification', [
+                        'order_id' => $order->id,
+                        'user_id' => $user->id,
+                        'token_count' => count($tokens),
+                        'status' => $status
+                    ]);
+                } else {
+                    Log::channel('orders')->warning('No valid FCM tokens found for user', [
+                        'order_id' => $order->id,
+                        'user_id' => $user->id,
+                        'status' => $status
+                    ]);
                 }
             }
 
-            // If no tokens found, log it but don't return
             if (empty($firebaseTokens)) {
-                \Log::channel('orders')->warning('No valid firebase tokens found for order #' . $order->id . ' user #' . ($order->user_id ?? 'null'));
-            } else {
-                // Prepare notification data
-                $notificationData = [
-                    'id' => $order->id,
-                    'status' => $status,
-                    'type' => PushNotification::STATUS_CHANGED,
-                    'title' => $title,
-                    'body' => $body,
-                    'order' => [
-                        'id' => $order->id,
-                        'status' => $status
-                    ]
-                ];
+                Log::channel('orders')->warning('No FCM tokens available for order notification', [
+                    'order_id' => $order->id,
+                    'user_id' => $order->user_id ?? null,
+                    'status' => $status
+                ]);
+                return;
+            }
 
+            // Prepare notification data
+            $notificationData = [
+                'id' => $order->id,
+                'status' => $status,
+                'type' => PushNotification::STATUS_CHANGED,
+                'title' => $title,
+                'body' => $body,
+                'order' => [
+                    'id' => $order->id,
+                    'status' => $status
+                ]
+            ];
+
+            try {
                 // Send notification
                 $this->sendNotification(
                     $firebaseTokens,
@@ -457,24 +480,64 @@ class OrderStatusUpdateService extends CoreService
                     $userIds
                 );
                 
-                // Always store in database for later reference
-                foreach ($userIds as $userId) {
+                Log::channel('orders')->info('Notification sent via FCM', [
+                    'order_id' => $order->id,
+                    'user_ids' => $userIds,
+                    'token_count' => count($firebaseTokens),
+                    'status' => $status
+                ]);
+            } catch (\Throwable $e) {
+                Log::channel('orders')->error('Failed to send FCM notification', [
+                    'order_id' => $order->id,
+                    'user_ids' => $userIds,
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString()
+                ]);
+            }
+            
+            // Store notification in database for each user
+            foreach ($userIds as $userId) {
+                try {
                     PushNotification::create([
                         'user_id' => $userId,
                         'type' => PushNotification::STATUS_CHANGED,
-                        'title' => (string)$order->id,
+                        'title' => $title,
                         'body' => $body,
-                        'data' => $notificationData
+                        'data' => [
+                            'order_id' => $order->id,
+                            'status' => $status
+                        ]
+                    ]);
+                    
+                    Log::channel('orders')->debug('Notification stored in database', [
+                        'order_id' => $order->id,
+                        'user_id' => $userId,
+                        'status' => $status
+                    ]);
+                } catch (\Throwable $e) {
+                    Log::channel('orders')->error('Failed to store notification in database', [
+                        'order_id' => $order->id,
+                        'user_id' => $userId,
+                        'error' => $e->getMessage(),
+                        'trace' => $e->getTraceAsString()
                     ]);
                 }
-                
-                \Log::channel('orders')->info('Notification sent for order #' . $order->id . ' status: ' . $status);
             }
-        } catch (\Throwable $e) {
-            \Log::channel('orders')->error('Failed to send notification: ' . $e->getMessage(), [
+            
+            Log::channel('orders')->info('Notification processing completed for order', [
                 'order_id' => $order->id,
-                'status' => $status
+                'status' => $status,
+                'user_count' => count($userIds),
+                'token_count' => count($firebaseTokens)
             ]);
+        } catch (\Throwable $e) {
+            Log::channel('orders')->error('Error in sendStatusNotification', [
+                'order_id' => $order->id,
+                'status' => $status,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            throw $e; // Re-throw to be handled by the caller
         }
     }
 }

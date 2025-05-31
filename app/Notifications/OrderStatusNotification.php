@@ -46,8 +46,18 @@ class OrderStatusNotification extends Notification implements ShouldQueue
         $channels = ['database'];
         
         // Only send FCM if the user has a token
-        if ($notifiable->fcm_tokens && count($notifiable->fcm_tokens) > 0) {
-            $channels[] = 'fcm';
+        if (!empty($notifiable->firebase_token)) {
+            // Convert to array if it's a single token
+            $tokens = is_array($notifiable->firebase_token) 
+                ? $notifiable->firebase_token 
+                : [$notifiable->firebase_token];
+                
+            // Filter out empty tokens
+            $tokens = array_filter($tokens);
+            
+            if (!empty($tokens)) {
+                $channels[] = 'fcm';
+            }
         }
         
         return $channels;
