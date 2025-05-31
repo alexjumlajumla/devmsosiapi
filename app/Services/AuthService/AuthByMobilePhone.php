@@ -120,118 +120,137 @@ class AuthByMobilePhone extends CoreService
     }
 
     /**
-     * @param array $array
+     * Verify OTP code and authenticate user
+     * 
+     * @param array $array Request data containing verifyId and verifyCode
      * @return JsonResponse
-     * @todo REMOVE IN THE FUTURE
-     */
-    /**
-     * @param array $array
-     * @return JsonResponse
+     * @throws \Exception On critical errors
      */
     public function confirmOPTCode(array $array): JsonResponse
     {
+        $verifyId = data_get($array, 'verifyId');
+        $verifyCode = data_get($array, 'verifyCode');
+        $isFirebase = data_get($array, 'type') === 'firebase';
+        
+        // Input validation
+        if (!$verifyId || !$verifyCode) {
+            return $this->onErrorResponse([
+                'code' => ResponseError::ERROR_400,
+                'message' => 'Verification ID and code are required.'
+            ]);
+        }
+        
+        // Start transaction for atomic operations
         \DB::beginTransaction();
         
         try {
-            \Log::debug('Starting confirmOPTCode', [
-                'verifyId' => data_get($array, 'verifyId'),
+            $logContext = [
+                'verifyId' => $verifyId,
                 'ip' => request()->ip(),
                 'user_agent' => request()->userAgent()
-            ]);
-
-            $isFirebase = data_get($array, 'type') === 'firebase';
-            $data = null;
-            $user = null;
+            ];
             
-            // Log database connection status
-            try {
-                $dbConnected = \DB::connection()->getPdo() ? true : false;
-                \Log::debug('Database connection status', ['connected' => $dbConnected]);
+            \Log::debug('Starting OTP verification', $logContext);
+            
+            // Try to get OTP data from cache first
+            $cacheKey = 'otp_' . $verifyId;
+            $otpData = \Cache::get($cacheKey);
+            $source = 'cache';
+            
+            // If not in cache, try database with lock to prevent race conditions
+            if (!$otpData) {
+                $source = 'database';
+                $otpRecord = \App\Models\SmsCode::where('verifyId', $verifyId)
+                    ->lockForUpdate()
+                    ->first();
                 
-                if (!$dbConnected) {
-                    throw new \Exception('Cannot connect to database');
-                }
-            } catch (\Exception $e) {
-                \Log::error('Database connection error', [
-                    'error' => $e->getMessage(),
-                    'trace' => $e->getTraceAsString()
-                ]);
-                throw new \Exception('Database connection error. Please try again later.');
+                $otpData = $otpRecord ? $otpRecord->toArray() : null;
             }
-
-            // Get the SMS code record with lock to prevent race conditions
-            $data = \App\Models\SmsCode::where("verifyId", data_get($array, 'verifyId'))
-                ->lockForUpdate()
-                ->first();
-
-            \Log::debug('SMS Code Lookup', [
-                'found' => (bool)$data,
-                'verifyId' => data_get($array, 'verifyId'),
-                'expired' => $data ? now()->gt($data->expiredAt) : null,
-                'code_matches' => $data ? ($data->OTPCode === data_get($array, 'verifyCode')) : null
-            ]);
-
-            if (empty($data)) {
-                \Log::error('SmsCode not found', ['verifyId' => data_get($array, 'verifyId')]);
+            
+            \Log::debug('OTP lookup result', array_merge($logContext, [
+                'source' => $source,
+                'found' => !empty($otpData),
+                'expired' => $otpData ? now()->gt(\Carbon\Carbon::parse($otpData['expiredAt'])) : null
+            ]));
+            
+            // Check if OTP exists
+            if (empty($otpData)) {
+                \Log::warning('OTP not found', $logContext);
                 \DB::rollBack();
                 return $this->onErrorResponse([
-                    'code'    => ResponseError::ERROR_404,
-                    'message' => __('errors.' . ResponseError::ERROR_404, locale: $this->language)
+                    'code' => ResponseError::ERROR_404,
+                    'message' => 'Verification code not found or expired. Please request a new one.'
                 ]);
             }
-
+            
+            // Parse expiration time
+            $expiredAt = $otpData['expiredAt'] instanceof \DateTime 
+                ? $otpData['expiredAt'] 
+                : \Carbon\Carbon::parse($otpData['expiredAt']);
+            
             // Check if OTP is expired
-            if (now()->gt($data->expiredAt)) {
-                \Log::error('OTP code expired', [
-                    'expiredAt' => $data->expiredAt,
-                    'now' => now(),
-                    'verifyId' => $data->verifyId
-                ]);
-                \DB::rollBack();
-                return $this->onErrorResponse([
-                    'code'    => ResponseError::ERROR_203,
-                    'message' => __('errors.' . ResponseError::ERROR_203, locale: $this->language)
-                ]);
-            }
-
-            // Verify OTP code
-            if ($data->OTPCode !== data_get($array, 'verifyCode')) {
-                \Log::error('Invalid OTP code', [
-                    'expected' => $data->OTPCode,
-                    'received' => data_get($array, 'verifyCode'),
-                    'verifyId' => $data->verifyId
-                ]);
-                \DB::rollBack();
-                return $this->onErrorResponse([
-                    'code'    => ResponseError::ERROR_201,
-                    'message' => __('errors.' . ResponseError::ERROR_201, locale: $this->language)
-                ]);
-            }
+            if (now()->gt($expiredAt)) {
+                // Clean up expired OTP
+                $this->cleanupOTP($verifyId, $otpData['id'] ?? null);
                 
-            // Cleanup the used OTP
-            $data->delete();
-
-            // Handle user creation/retrieval
-            $user = $this->model()->where('phone', $data->phone)->first();
+                \Log::warning('OTP code expired', array_merge($logContext, [
+                    'expiredAt' => $expiredAt,
+                    'now' => now()
+                ]));
+                
+                return $this->onErrorResponse([
+                    'code' => ResponseError::ERROR_203,
+                    'message' => 'Verification code has expired. Please request a new one.'
+                ]);
+            }
+            
+            // Verify OTP code (type-safe comparison)
+            if ((string)$otpData['OTPCode'] !== (string)$verifyCode) {
+                \Log::warning('Invalid OTP code', array_merge($logContext, [
+                    'expected' => $otpData['OTPCode'],
+                    'received' => $verifyCode,
+                    'type_expected' => gettype($otpData['OTPCode']),
+                    'type_received' => gettype($verifyCode)
+                ]));
+                
+                return $this->onErrorResponse([
+                    'code' => ResponseError::ERROR_201,
+                    'message' => 'Invalid verification code. Please try again.'
+                ]);
+            }
+            
+            // OTP is valid, proceed with cleanup and user authentication
+            $this->cleanupOTP($verifyId, $otpData['id'] ?? null);
+            
+            // Get or create user
+            $phone = $otpData['phone'];
+            $user = $this->model()->where('phone', $phone)->first();
             
             if (!$user) {
                 try {
+                    // Prepare user data
                     $userData = [
-                        'firstname'  => $data->phone,
-                        'phone'      => $data->phone,
+                        'firstname' => $phone,
                         'ip_address' => request()->ip(),
-                        'auth_type'  => $isFirebase ? 'firebase' : 'phone',
-                        'active'     => true,
+                        'auth_type' => $isFirebase ? 'firebase' : 'phone',
+                        'active' => true,
                         'phone_verified_at' => now(),
                     ];
-
+                    
+                    // Add Firebase-specific fields if needed
                     if ($isFirebase) {
-                        $userData['email'] = data_get($array, 'email');
-                        $userData['firstname'] = data_get($array, 'firstname', $data->phone);
-                        $userData['lastname'] = data_get($array, 'lastname', '');
+                        $userData = array_merge($userData, [
+                            'email' => data_get($array, 'email'),
+                            'firstname' => data_get($array, 'firstname', $phone),
+                            'lastname' => data_get($array, 'lastname', ''),
+                        ]);
                     }
-
-                    $user = $this->model()->create($userData);
+                    
+                    // Create the user
+                    $user = $this->createNewUser($phone, $userData);
+                    
+                    // Assign default role
+                    $this->ensureUserHasRole($user);
                     
                     \Log::info('New user created during OTP verification', [
                         'user_id' => $user->id,
@@ -239,43 +258,75 @@ class AuthByMobilePhone extends CoreService
                         'auth_type' => $isFirebase ? 'firebase' : 'phone'
                     ]);
                     
-                    // Assign default role
-                    $this->ensureUserHasRole($user);
                 } catch (\Exception $e) {
                     \DB::rollBack();
-                    \Log::error('User creation failed', [
+                    \Log::error('Failed to create user during OTP verification', [
+                        'phone' => $phone,
                         'error' => $e->getMessage(),
                         'trace' => $e->getTraceAsString()
                     ]);
-                    throw new \Exception('Failed to create user account. Please try again.');
+                    
+                    return $this->onErrorResponse([
+                        'code' => ResponseError::ERROR_400,
+                        'message' => 'Failed to create user account. Please try again.'
+                    ]);
                 }
             }
-                
+            
             // Generate auth token
             $token = $user->createToken('api_token')->plainTextToken;
-
+            
             \DB::commit();
             
-            return $this->successResponse(__('Successfully authenticated'), [
+            return $this->successResponse('Successfully authenticated', [
                 'token' => $token,
-                'user'  => \App\Http\Resources\UserResource::make($user),
+                'user' => \App\Http\Resources\UserResource::make($user),
             ]);
-                
+            
         } catch (\Exception $e) {
             \DB::rollBack();
-            \Log::error('Error in confirmOPTCode', [
+            \Log::error('OTP verification failed', [
+                'verifyId' => $verifyId,
                 'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-                'input' => array_merge($array, ['verifyCode' => '***'])
+                'trace' => $e->getTraceAsString()
             ]);
             
             return $this->onErrorResponse([
-                'code'    => ResponseError::ERROR_400,
-                'message' => 'An error occurred during authentication. Please try again.',
-                'debug' => config('app.debug') ? $e->getMessage() : null
+                'code' => ResponseError::ERROR_400,
+                'message' => 'An error occurred during verification. Please try again.'
             ]);
         }
-
+    }
+    
+    /**
+     * Clean up OTP data from cache and database
+     * 
+     * @param string $verifyId
+     * @param int|null $otpId
+     * @return void
+     */
+    protected function cleanupOTP(string $verifyId, ?int $otpId = null): void
+    {
+        try {
+            // Remove from cache
+            $cacheKey = 'otp_' . $verifyId;
+            \Cache::forget($cacheKey);
+            
+            // Remove from database if ID is provided
+            if ($otpId) {
+                \App\Models\SmsCode::where('id', $otpId)->delete();
+            }
+            
+            \Log::debug('Cleaned up OTP data', ['verifyId' => $verifyId, 'otpId' => $otpId]);
+            
+        } catch (\Exception $e) {
+            // Log but don't fail the main operation
+            \Log::error('Error cleaning up OTP data', [
+                'verifyId' => $verifyId,
+                'otpId' => $otpId,
+                'error' => $e->getMessage()
+            ]);
+        }
     }
 
     public function forgetPasswordVerify(array $data): JsonResponse
@@ -473,11 +524,15 @@ class AuthByMobilePhone extends CoreService
     }
     
     /**
-     * Create a new user with the given phone number
+     * Create a new user with the given phone number and additional data
+     * 
+     * @param string $phone
+     * @param array $additionalData
+     * @return \App\Models\User
      */
-    protected function createNewUser(string $phone): JsonResponse
+    protected function createNewUser(string $phone, array $additionalData = [])
     {
-        $userData = [
+        $userData = array_merge([
             'firstname' => $phone,
             'phone' => $phone,
             'ip_address' => request()->ip(),
@@ -486,7 +541,7 @@ class AuthByMobilePhone extends CoreService
             'phone_verified_at' => now(),
             'created_at' => now(),
             'updated_at' => now()
-        ];
+        ], $additionalData);
         
         // Create user directly using query builder to avoid model events
         $userId = DB::table('users')->insertGetId($userData);
@@ -494,14 +549,11 @@ class AuthByMobilePhone extends CoreService
         
         \Log::info('New user created', [
             'user_id' => $user->id,
-            'phone' => $phone
+            'phone' => $phone,
+            'auth_type' => $userData['auth_type']
         ]);
         
-        // Assign default role
-        $this->assignUserRole($user);
-        
-        // Proceed with SMS verification
-        return $this->proceedWithSmsVerification($user, $phone);
+        return $user;
     }
     
     /**

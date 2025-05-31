@@ -109,16 +109,67 @@ class SMSBaseService extends CoreService
         return ['verifyId' => Str::uuid(), 'otpCode' => rand(100000, 999999)];
     }
 
+    /**
+     * Store OTP in both cache and database
+     * 
+     * @param string $phone Phone number
+     * @param array $otp OTP data with verifyId and otpCode
+     * @return void
+     * @throws \Exception If storage fails
+     */
     public function setOTPToCache($phone, $otp)
     {
-        $verifyId  = data_get($otp, 'verifyId');
-        $expiredAt = Settings::where('key', 'otp_expire_time')->first()?->value;
+        $verifyId = data_get($otp, 'verifyId');
+        $otpCode = data_get($otp, 'otpCode');
         
-        SmsCode::create([
-            'phone'     => $phone,
-            'verifyId'  => $verifyId,
-            'OTPCode'   => data_get($otp, 'otpCode'),
-            'expiredAt' => now()->addMinutes($expiredAt >= 1 ? $expiredAt : 10),
-        ]);
+        if (!$verifyId || !$otpCode) {
+            throw new \Exception('Invalid OTP data provided');
+        }
+        
+        // Get expiration time from settings (default to 10 minutes if not set)
+        $expireMinutes = Settings::where('key', 'otp_expire_time')->first()?->value;
+        $expireMinutes = is_numeric($expireMinutes) && $expireMinutes >= 1 ? (int)$expireMinutes : 10;
+        $expiresAt = now()->addMinutes($expireMinutes);
+        
+        // Prepare OTP data for storage
+        $otpData = [
+            'phone' => $phone,
+            'verifyId' => $verifyId,
+            'OTPCode' => $otpCode,
+            'expiredAt' => $expiresAt,
+            'created_at' => now(),
+            'updated_at' => now()
+        ];
+        
+        try {
+            // Store in database
+            $smsCode = SmsCode::create($otpData);
+            
+            // Store in cache with same expiration time
+            $cacheKey = 'otp_' . $verifyId;
+            $cacheExpiration = $expiresAt;
+            
+            // Store the full OTP data in cache for easy retrieval
+            \Cache::put($cacheKey, $otpData, $cacheExpiration);
+            
+            \Log::debug('OTP stored successfully', [
+                'phone' => $phone,
+                'verifyId' => $verifyId,
+                'expiresAt' => $expiresAt->toDateTimeString(),
+                'cacheKey' => $cacheKey
+            ]);
+            
+            return $smsCode;
+            
+        } catch (\Exception $e) {
+            \Log::error('Failed to store OTP', [
+                'phone' => $phone,
+                'verifyId' => $verifyId,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            
+            throw new \Exception('Failed to store verification code. Please try again.');
+        }
     }
 }
