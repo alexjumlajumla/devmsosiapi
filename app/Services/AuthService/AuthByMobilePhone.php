@@ -219,15 +219,19 @@ class AuthByMobilePhone extends CoreService
                 ]);
             }
             
-            // OTP is valid, proceed with cleanup and user authentication
-            $this->cleanupOTP($verifyId, $otpData['id'] ?? null);
-            
             // Get or create user
             $phone = $otpData['phone'];
-            $user = $this->model()->where('phone', $phone)->first();
             
-            if (!$user) {
-                try {
+            // Start transaction to ensure data consistency
+            DB::beginTransaction();
+            
+            try {
+                // Log the start of user retrieval/creation
+                \Log::debug('Starting user retrieval/creation', ['phone' => $phone]);
+                
+                $user = $this->model()->where('phone', $phone)->first();
+                
+                if (!$user) {
                     // Prepare user data
                     $userData = [
                         'firstname' => $phone,
@@ -248,41 +252,70 @@ class AuthByMobilePhone extends CoreService
                     
                     // Create the user
                     $user = $this->createNewUser($phone, $userData);
-                    
-                    // Assign default role
+                    \Log::info('New user created successfully', ['user_id' => $user->id]);
+                } else {
+                    \Log::info('Existing user found', ['user_id' => $user?->id]);
+                }
+                
+                // Ensure user has a role
+                try {
                     $this->ensureUserHasRole($user);
-                    
-                    \Log::info('New user created during OTP verification', [
-                        'user_id' => $user->id,
-                        'phone' => $user->phone,
-                        'auth_type' => $isFirebase ? 'firebase' : 'phone'
-                    ]);
-                    
+                    \Log::debug('Role assignment successful', ['user_id' => $user?->id]);
                 } catch (\Exception $e) {
-                    \DB::rollBack();
-                    \Log::error('Failed to create user during OTP verification', [
-                        'phone' => $phone,
+                    \Log::error('Failed to assign role to user', [
+                        'user_id' => $user?->id,
                         'error' => $e->getMessage(),
                         'trace' => $e->getTraceAsString()
                     ]);
-                    
-                    return $this->onErrorResponse([
-                        'code' => ResponseError::ERROR_400,
-                        'message' => 'Failed to create user account. Please try again.'
+                    throw new \Exception('Failed to assign user role');
+                }
+                
+                // Only clean up OTP after successful user retrieval/creation and role assignment
+                $this->cleanupOTP($verifyId, $otpData['id'] ?? null);
+                \Log::debug('OTP cleaned up after successful verification', ['verifyId' => $verifyId]);
+                
+                // Commit the transaction
+                DB::commit();
+                \Log::info('OTP verification transaction committed successfully', ['user_id' => $user?->id]);
+                
+                // Log successful verification
+                if ($user->wasRecentlyCreated) {
+                    \Log::info('New user created during OTP verification', [
+                        'user_id' => $user->id,
+                        'phone' => $user->phone,
+                        'auth_type' => $user->auth_type
+                    ]);
+                } else {
+                    \Log::info('User logged in via OTP verification', [
+                        'user_id' => $user->id,
+                        'phone' => $user->phone,
+                        'auth_type' => $user->auth_type
                     ]);
                 }
+                
+                // At this point, we have a valid user with a role
+                // Now generate the authentication token
+                $token = $user->createToken('api_token')->plainTextToken;
+                
+                // Return success response with user data and token
+                return $this->successResponse('Successfully logged in', [
+                    'token' => $token,
+                    'user' => UserResource::make($user)
+                ]);
+                
+            } catch (\Exception $e) {
+                // Rollback the transaction in case of any error
+                DB::rollBack();
+                \Log::error('Error during OTP verification transaction', [
+                    'phone' => $phone,
+                    'verifyId' => $verifyId,
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString()
+                ]);
+                
+                // Re-throw the exception to be handled by the outer try-catch
+                throw $e;
             }
-            
-            // Generate auth token
-            $token = $user->createToken('api_token')->plainTextToken;
-            
-            \DB::commit();
-            
-            return $this->successResponse('Successfully authenticated', [
-                'token' => $token,
-                'user' => \App\Http\Resources\UserResource::make($user),
-            ]);
-            
         } catch (\Exception $e) {
             \DB::rollBack();
             \Log::error('OTP verification failed', [
@@ -305,27 +338,74 @@ class AuthByMobilePhone extends CoreService
      * @param int|null $otpId
      * @return void
      */
+    /**
+     * Clean up OTP data from cache and database
+     * 
+     * @param string $verifyId The verification ID
+     * @param int|null $otpId Optional OTP record ID from database
+     * @return void
+     */
     protected function cleanupOTP(string $verifyId, ?int $otpId = null): void
     {
+        $startTime = microtime(true);
+        $success = false;
+        
         try {
-            // Remove from cache
+            // Log the cleanup attempt
+            \Log::debug('Starting OTP cleanup', [
+                'verifyId' => $verifyId, 
+                'otpId' => $otpId,
+                'source' => 'cleanupOTP'
+            ]);
+            
+            // Remove from cache first
             $cacheKey = 'otp_' . $verifyId;
-            \Cache::forget($cacheKey);
+            $cacheCleared = \Cache::forget($cacheKey);
             
             // Remove from database if ID is provided
+            $dbCleared = false;
             if ($otpId) {
-                \App\Models\SmsCode::where('id', $otpId)->delete();
+                $dbCleared = (bool) \App\Models\SmsCode::where('id', $otpId)->delete();
+            } else {
+                // If no OTP ID provided, try to clean up by verifyId
+                $dbCleared = \App\Models\SmsCode::where('verifyId', $verifyId)->delete() > 0;
             }
             
-            \Log::debug('Cleaned up OTP data', ['verifyId' => $verifyId, 'otpId' => $otpId]);
+            $success = $cacheCleared || $dbCleared;
             
-        } catch (\Exception $e) {
-            // Log but don't fail the main operation
-            \Log::error('Error cleaning up OTP data', [
+            // Log the result
+            \Log::debug('OTP cleanup completed', [
                 'verifyId' => $verifyId,
                 'otpId' => $otpId,
-                'error' => $e->getMessage()
+                'cache_cleared' => $cacheCleared,
+                'db_cleared' => $dbCleared,
+                'execution_time_ms' => round((microtime(true) - $startTime) * 1000, 2)
             ]);
+            
+        } catch (\Exception $e) {
+            // Log detailed error but don't fail the main operation
+            \Log::error('Error during OTP cleanup', [
+                'verifyId' => $verifyId,
+                'otpId' => $otpId,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'execution_time_ms' => round((microtime(true) - $startTime) * 1000, 2)
+            ]);
+            
+            // If we failed to clean up, schedule a background job to retry
+            if (app()->environment('production')) {
+                dispatch(function () use ($verifyId, $otpId) {
+                    try {
+                        $this->cleanupOTP($verifyId, $otpId);
+                    } catch (\Exception $e) {
+                        \Log::error('Background OTP cleanup failed', [
+                            'verifyId' => $verifyId,
+                            'otpId' => $otpId,
+                            'error' => $e->getMessage()
+                        ]);
+                    }
+                })->delay(now()->addSeconds(30));
+            }
         }
     }
 
