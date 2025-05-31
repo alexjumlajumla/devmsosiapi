@@ -807,81 +807,138 @@ trait Notification
 
     public function newOrderNotification(Order $order): void
     {
-        Log::info('Starting newOrderNotification', [
-            'order_id' => $order->id,
-            'shop_id' => $order->shop_id
-        ]);
-
-        // Get admin tokens
-        $adminUsers = User::with(['roles' => fn($q) => $q->where('name', 'admin')])
-            ->whereHas('roles', fn($q) => $q->where('name', 'admin'))
-            ->whereNotNull('firebase_token')
-            ->get(['id', 'firebase_token']);
-
-        $adminFirebaseTokens = $adminUsers->pluck('firebase_token', 'id')->toArray();
-
-        Log::debug('Admin tokens fetched', [
-            'admin_count' => $adminUsers->count(),
-            'admin_ids' => $adminUsers->pluck('id')->toArray()
-        ]);
-
-        // Get seller tokens for the specific shop
-        $sellerUsers = User::with([
-                'shop' => fn($q) => $q->where('id', $order->shop_id)
-            ])
-            ->whereHas('shop', fn($q) => $q->where('id', $order->shop_id))
-            ->whereNotNull('firebase_token')
-            ->get(['id', 'firebase_token']);
-
-        $sellersFirebaseTokens = $sellerUsers->pluck('firebase_token', 'id')->toArray();
-
-        Log::debug('Seller tokens fetched', [
-            'seller_count' => $sellerUsers->count(),
-            'seller_ids' => $sellerUsers->pluck('id')->toArray()
-        ]);
-
-        $aTokens = [];
-        $sTokens = [];
-
-        // Process admin tokens
-        foreach ($adminFirebaseTokens as $adminId => $adminToken) {
-            $tokens = is_array($adminToken) ? array_values($adminToken) : [$adminToken];
-            $aTokens = array_merge($aTokens, $tokens);
-            
-            Log::debug('Admin token processed', [
-                'user_id' => $adminId,
-                'token_count' => count($tokens),
-                'token_sample' => !empty($tokens) ? substr($tokens[0], 0, 10) . '...' : 'none'
+        try {
+            Log::info('Starting newOrderNotification', [
+                'order_id' => $order->id,
+                'shop_id' => $order->shop_id,
+                'shop_exists' => (bool) \App\Models\Shop::find($order->shop_id)
             ]);
-        }
 
-        // Process seller tokens
-        foreach ($sellersFirebaseTokens as $sellerId => $sellerToken) {
-            $tokens = is_array($sellerToken) ? array_values($sellerToken) : [$sellerToken];
-            $sTokens = array_merge($sTokens, $tokens);
-            
-            Log::debug('Seller token processed', [
-                'user_id' => $sellerId,
-                'token_count' => count($tokens),
-                'token_sample' => !empty($tokens) ? substr($tokens[0], 0, 10) . '...' : 'none'
+            // Get all admin users with debug info
+            $allAdmins = \App\Models\User::with('roles')
+                ->whereHas('roles', fn($q) => $q->where('name', 'admin'))
+                ->get(['id', 'firebase_token']);
+
+            Log::debug('All admin users', [
+                'total_admins' => $allAdmins->count(),
+                'admins_with_tokens' => $allAdmins->whereNotNull('firebase_token')->count(),
+                'admin_ids' => $allAdmins->pluck('id')->toArray(),
+                'admin_tokens' => $allAdmins->map(fn($admin) => [
+                    'user_id' => $admin->id,
+                    'has_token' => !empty($admin->firebase_token),
+                    'token_type' => gettype($admin->firebase_token)
+                ])
             ]);
+
+            // Get admin tokens
+            $adminUsers = $allAdmins->filter(fn($user) => !empty($user->firebase_token));
+            $adminFirebaseTokens = [];
+
+            foreach ($adminUsers as $user) {
+                $tokens = is_string($user->firebase_token) ? [$user->firebase_token] : 
+                         (is_array($user->firebase_token) ? array_values($user->firebase_token) : []);
+                
+                if (!empty($tokens)) {
+                    $adminFirebaseTokens[$user->id] = $tokens;
+                }
+            }
+
+            Log::debug('Processed admin tokens', [
+                'admin_count' => count($adminFirebaseTokens),
+                'admin_ids' => array_keys($adminFirebaseTokens),
+                'total_tokens' => array_sum(array_map('count', $adminFirebaseTokens))
+            ]);
+
+            // Get seller tokens for the specific shop
+            $allSellers = \App\Models\User::with(['roles', 'shop'])
+                ->whereHas('roles', fn($q) => $q->where('name', 'seller'))
+                ->whereHas('shop', fn($q) => $q->where('id', $order->shop_id))
+                ->get(['id', 'firebase_token']);
+
+            Log::debug('All seller users for shop', [
+                'shop_id' => $order->shop_id,
+                'total_sellers' => $allSellers->count(),
+                'sellers_with_tokens' => $allSellers->whereNotNull('firebase_token')->count(),
+                'seller_ids' => $allSellers->pluck('id')->toArray()
+            ]);
+
+            $sellersFirebaseTokens = [];
+            
+            foreach ($allSellers as $user) {
+                $tokens = is_string($user->firebase_token) ? [$user->firebase_token] : 
+                         (is_array($user->firebase_token) ? array_values($user->firebase_token) : []);
+                
+                if (!empty($tokens)) {
+                    $sellersFirebaseTokens[$user->id] = $tokens;
+                }
+            }
+
+            Log::debug('Processed seller tokens', [
+                'seller_count' => count($sellersFirebaseTokens),
+                'seller_ids' => array_keys($sellersFirebaseTokens),
+                'total_tokens' => array_sum(array_map('count', $sellersFirebaseTokens))
+            ]);
+
+            // Flatten all tokens
+            $aTokens = [];
+            $sTokens = [];
+
+            // Process admin tokens
+            foreach ($adminFirebaseTokens as $adminId => $tokens) {
+                $aTokens = array_merge($aTokens, $tokens);
+                Log::debug('Admin token processed', [
+                    'user_id' => $adminId,
+                    'token_count' => count($tokens)
+                ]);
+            }
+
+            // Process seller tokens
+            foreach ($sellersFirebaseTokens as $sellerId => $tokens) {
+                $sTokens = array_merge($sTokens, $tokens);
+                Log::debug('Seller token processed', [
+                    'user_id' => $sellerId,
+                    'token_count' => count($tokens)
+                ]);
+            }
+
+            $allTokens = array_values(array_unique(array_merge($aTokens, $sTokens)));
+            $allUserIds = array_merge(
+                array_keys($adminFirebaseTokens), 
+                array_keys($sellersFirebaseTokens)
+            );
+
+            Log::info('Sending notification', [
+                'total_tokens' => count($allTokens),
+                'total_users' => count($allUserIds),
+                'notification_type' => PushNotification::NEW_ORDER,
+                'order_id' => $order->id,
+                'token_sample' => !empty($allTokens) ? substr($allTokens[0], 0, 10) . '...' : 'none'
+            ]);
+
+            if (empty($allTokens)) {
+                Log::warning('No valid FCM tokens found for notification', [
+                    'order_id' => $order->id,
+                    'admin_count' => count($adminFirebaseTokens),
+                    'seller_count' => count($sellersFirebaseTokens)
+                ]);
+                return;
+            }
+
+            $this->sendNotification(
+                $allTokens,
+                __('errors.' . ResponseError::NEW_ORDER, ['id' => $order->id], $this->language),
+                $order->id,
+                $order->setAttribute('type', PushNotification::NEW_ORDER)->only(['id', 'status', 'delivery_type']),
+                $allUserIds
+            );
+
+        } catch (\Throwable $e) {
+            Log::error('Error in newOrderNotification', [
+                'order_id' => $order->id ?? null,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            throw $e;
         }
-        $allTokens = array_values(array_unique(array_merge($aTokens, $sTokens)));
-        $allUserIds = array_merge(array_keys($adminFirebaseTokens), array_keys($sellersFirebaseTokens));
-
-        Log::info('Sending notification', [
-            'total_tokens' => count($allTokens),
-            'total_users' => count($allUserIds),
-            'notification_type' => PushNotification::NEW_ORDER,
-            'order_id' => $order->id
-        ]);
-
-        $this->sendNotification(
-            $allTokens,
-            __('errors.' . ResponseError::NEW_ORDER, ['id' => $order->id], $this->language),
-            $order->id,
-            $order->setAttribute('type', PushNotification::NEW_ORDER)->only(['id', 'status', 'delivery_type']),
-            $allUserIds
-        );
     }
 }
