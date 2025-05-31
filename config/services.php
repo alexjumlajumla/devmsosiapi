@@ -4,10 +4,25 @@ return [
     // ... existing code ...
 
     'vfd' => [
-        'base_url' => env('VFD_BASE_URL', 'https://vfd-api.example.com'),
+        // API Settings
+        'base_url' => env('VFD_BASE_URL', 'https://api.vfd.tz'),
         'api_key' => env('VFD_API_KEY'),
         'tin' => env('VFD_TIN'),
-        'cert_path' => env('VFD_CERT_PATH'),
+        'cert_path' => env('VFD_CERT_PATH', storage_path('certs/vfd/cert.pem')),
+        'timeout' => 30,
+        'retry_attempts' => 3,
+        'retry_delay' => 5, // seconds
+        
+        // Archive Settings
+        'archive_enabled' => env('VFD_ARCHIVE_ENABLED', false),
+        'archive_endpoint' => env('VFD_ARCHIVE_ENDPOINT'),
+        'archive_api_key' => env('VFD_ARCHIVE_API_KEY'),
+        'archive_verify_ssl' => env('VFD_ARCHIVE_VERIFY_SSL', true),
+        
+        // Notification Settings
+        'notification_sms_enabled' => env('VFD_NOTIFICATION_SMS_ENABLED', true),
+        'notification_email_enabled' => env('VFD_NOTIFICATION_EMAIL_ENABLED', false),
+        'notification_email_address' => env('VFD_NOTIFICATION_EMAIL_ADDRESS'),
     ],
     
     'openai' => [

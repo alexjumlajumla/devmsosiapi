@@ -410,6 +410,10 @@ Route::group(['prefix' => 'v1', 'middleware' => ['block.ip']], function () {
             Route::get('profile/liked/looks',                   [User\ProfileController::class, 'likedLooks']);
             Route::get('profile/notifications-statistic',       [User\ProfileController::class, 'notificationStatistic']);
 			Route::get('search-sending',                        [User\ProfileController::class, 'searchSending']);
+
+            // VFD Receipts
+            Route::get('orders/{orderId}/receipt', [User\VfdReceiptController::class, 'getReceipt']);
+            Route::post('orders/{orderId}/receipt/generate', [User\VfdReceiptController::class, 'generateReceipt']);
 			
 			// new for sending otp and updating phone number
 		    Route::post('profile/phone/update-send-otp', [User\ProfileController::class, 'updatePhoneAndSendOtp']);

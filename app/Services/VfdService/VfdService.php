@@ -27,6 +27,52 @@ class VfdService extends CoreService
         $this->tin = config('services.vfd.tin');
         $this->certPath = config('services.vfd.cert_path');
     }
+    
+    /**
+     * Test connection to VFD API
+     * 
+     * @return array
+     */
+    public function testConnection(): array
+    {
+        try {
+            $response = Http::withHeaders([
+                'Authorization' => "Bearer {$this->apiKey}",
+                'Accept' => 'application/json',
+            ])
+            ->withOptions([
+                'verify' => $this->certPath ?: false,
+                'timeout' => 10,
+            ])
+            ->get("{$this->baseUrl}/api/health");
+            
+            if ($response->successful()) {
+                return [
+                    'success' => true,
+                    'message' => 'Connection successful',
+                    'data' => $response->json(),
+                ];
+            }
+            
+            return [
+                'success' => false,
+                'message' => 'Connection failed: ' . $response->status() . ' ' . $response->body(),
+                'status' => $response->status(),
+            ];
+            
+        } catch (\Exception $e) {
+            return [
+                'success' => false,
+                'message' => 'Connection error: ' . $e->getMessage(),
+                'exception' => [
+                    'message' => $e->getMessage(),
+                    'code' => $e->getCode(),
+                    'file' => $e->getFile(),
+                    'line' => $e->getLine(),
+                ],
+            ];
+        }
+    }
 
     /**
      * Implement the abstract method from CoreService
@@ -48,6 +94,11 @@ class VfdService extends CoreService
     public function generateReceipt(string $type, array $data): array
     {
         try {
+            // Validate required fields
+            if (!in_array($type, [VfdReceipt::TYPE_DELIVERY, VfdReceipt::TYPE_SUBSCRIPTION])) {
+                throw new \InvalidArgumentException('Invalid receipt type');
+            }
+
             // Create VFD receipt record
             $receipt = VfdReceipt::create([
                 'receipt_type' => $type,
@@ -55,18 +106,26 @@ class VfdService extends CoreService
                 'model_type' => $data['model_type'],
                 'amount' => $data['amount'],
                 'payment_method' => $data['payment_method'],
-                'customer_name' => $data['customer_name'] ?? null,
+                'customer_name' => $data['customer_name'] ?? 'Customer',
                 'customer_phone' => $data['customer_phone'] ?? null,
                 'customer_email' => $data['customer_email'] ?? null,
                 'receipt_number' => $this->generateReceiptNumber(),
                 'status' => VfdReceipt::STATUS_PENDING
             ]);
 
+            // Log receipt creation
+            Log::info('Creating VFD receipt', [
+                'receipt_id' => $receipt->id,
+                'receipt_number' => $receipt->receipt_number,
+                'type' => $type,
+                'amount' => $data['amount']
+            ]);
+
             // Prepare VFD API request payload
             $payload = [
                 'tin' => $this->tin,
                 'receiptNumber' => $receipt->receipt_number,
-                'amount' => $receipt->amount,
+                'amount' => (float) $receipt->amount,
                 'paymentMethod' => $this->mapPaymentMethod($receipt->payment_method),
                 'customerDetails' => [
                     'name' => $receipt->customer_name,
@@ -77,16 +136,38 @@ class VfdService extends CoreService
                     [
                         'description' => $type === VfdReceipt::TYPE_DELIVERY ? 'Delivery Fee' : 'Subscription Fee',
                         'quantity' => 1,
-                        'amount' => $receipt->amount
+                        'unitPrice' => (float) $receipt->amount,
+                        'totalPrice' => (float) $receipt->amount,
+                        'taxCode' => 'S', // Standard rate
+                        'taxRate' => 18.0 // 18% VAT
                     ]
-                ]
+                ],
+                'dateTime' => now()->format('Y-m-d H:i:s'),
+                'currency' => 'TZS',
+                'reference' => 'ORDER-' . $data['model_id']
             ];
 
+            // Log the payload for debugging
+            Log::debug('VFD API Request Payload', $payload);
+
             // Make API request to VFD
-            $response = Http::withHeaders([
-                'Authorization' => "Bearer {$this->apiKey}",
-                'Content-Type' => 'application/json'
-            ])->post("{$this->baseUrl}/receipts/generate", $payload);
+            $response = Http::timeout(30)
+                ->withHeaders([
+                    'Authorization' => "Bearer {$this->apiKey}",
+                    'Content-Type' => 'application/json',
+                    'Accept' => 'application/json'
+                ])
+                ->withOptions([
+                    'verify' => $this->certPath ?: false,
+                    'debug' => config('app.debug') ? fopen('php://stderr', 'w') : false
+                ])
+                ->post("{$this->baseUrl}/api/receipts", $payload);
+
+            // Log the response
+            Log::debug('VFD API Response', [
+                'status' => $response->status(),
+                'body' => $response->body()
+            ]);
 
             if ($response->successful()) {
                 $responseData = $response->json();
@@ -94,7 +175,8 @@ class VfdService extends CoreService
                 $receipt->update([
                     'receipt_url' => $responseData['receiptUrl'] ?? null,
                     'vfd_response' => json_encode($responseData),
-                    'status' => VfdReceipt::STATUS_GENERATED
+                    'status' => VfdReceipt::STATUS_GENERATED,
+                    'receipt_number' => $responseData['receiptNumber'] ?? $receipt->receipt_number
                 ]);
 
                 // Send SMS with receipt URL if phone is available
@@ -109,15 +191,25 @@ class VfdService extends CoreService
                 ];
             }
 
+            // Handle API errors
+            $errorResponse = $response->json();
+            $errorMessage = $errorResponse['message'] ?? $response->body();
+            
             $receipt->update([
                 'status' => VfdReceipt::STATUS_FAILED,
-                'error_message' => $response->body()
+                'error_message' => $errorMessage
+            ]);
+
+            Log::error('VFD API Error', [
+                'status' => $response->status(),
+                'error' => $errorMessage,
+                'receipt_id' => $receipt->id
             ]);
 
             return [
                 'status' => false,
-                'message' => 'Failed to generate receipt',
-                'error' => $response->body()
+                'message' => 'Failed to generate receipt: ' . $errorMessage,
+                'error' => $errorMessage
             ];
 
         } catch (Exception $e) {

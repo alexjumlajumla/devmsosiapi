@@ -28,10 +28,23 @@ use App\Services\OrderService\OrderSmsService;
 use App\Models\Trip;
 use App\Models\TripLocation;
 use App\Helpers\NotificationHelper;
+use App\Services\FCM\FcmTokenService;
+use App\Services\Order\VfdReceiptService;
 
 class OrderStatusUpdateService extends CoreService
 {
     use Notification;
+
+    private FcmTokenService $fcmTokenService;
+    private VfdReceiptService $vfdReceiptService;
+
+    public function __construct(
+        FcmTokenService $fcmTokenService,
+        VfdReceiptService $vfdReceiptService
+    ) {
+        $this->fcmTokenService = $fcmTokenService;
+        $this->vfdReceiptService = $vfdReceiptService;
+    }
 
     /**
      * @return string
@@ -221,11 +234,30 @@ class OrderStatusUpdateService extends CoreService
 					(new EmailSendService)->sendOrder($order);
 				}
 
+                // Update order status
                 $order->update([
-                    'status'  => $status,
-                    'current' => in_array($status, [Order::STATUS_DELIVERED, Order::STATUS_CANCELED]) ? 0 : $order->current,
-                    'note'    => request('note') . " | $order->note",
+                    'status' => $status,
+                    'current' => in_array($status, [Order::STATUS_NEW, Order::STATUS_ACCEPTED, Order::STATUS_READY, Order::STATUS_ON_A_WAY, Order::STATUS_PAID]) ? 1 : 0,
                 ]);
+
+                // Generate VFD receipt when order is delivered
+                if ($status === Order::STATUS_DELIVERED && $order->delivery_fee > 0) {
+                    try {
+                        $result = $this->vfdReceiptService->generateForOrder($order, $order->paymentProcess?->payment?->tag ?? 'cash');
+                        if (!$result['status']) {
+                            Log::error('Failed to generate VFD receipt', [
+                                'order_id' => $order->id,
+                                'error' => $result['error'] ?? 'Unknown error'
+                            ]);
+                        }
+                    } catch (\Exception $e) {
+                        Log::error('Exception while generating VFD receipt', [
+                            'order_id' => $order->id,
+                            'error' => $e->getMessage(),
+                            'trace' => $e->getTraceAsString()
+                        ]);
+                    }
+                }
 
                 // Send SMS notification based on new status
                 switch($status) {
@@ -428,7 +460,7 @@ class OrderStatusUpdateService extends CoreService
             // Get the user and their FCM tokens using the EnhancedFcmTokenService
             if ($order->user) {
                 $user = $order->user;
-                $fcmService = app(\App\Services\FCM\FcmTokenService::class);
+                $fcmService = $this->fcmTokenService;
                 $tokens = $fcmService->getUserTokens($user);
                 
                 if (!empty($tokens)) {
