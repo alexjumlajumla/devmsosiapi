@@ -4,6 +4,7 @@ namespace App\Http\Controllers\API\v1\Auth;
 
 use App\Helpers\ResponseError;
 use App\Http\Controllers\Controller;
+use Illuminate\Support\Facades\RateLimiter;
 use App\Http\Requests\Auth\ForgetPasswordRequest;
 use App\Http\Requests\Auth\PhoneVerifyRequest;
 use App\Http\Requests\Auth\LoginRequest;
@@ -65,7 +66,7 @@ class LoginController extends Controller
                 'has_firebase_token' => $request->has('firebase_token')
             ]);
             
-            // Add FCM token if provided
+            // Add FCM token if provided with rate limiting
             if ($request->has('firebase_token')) {
                 try {
                     $firebaseToken = $request->input('firebase_token');
@@ -75,17 +76,42 @@ class LoginController extends Controller
                         'token_length' => strlen($firebaseToken)
                     ]);
                     
-                    $user->addFcmToken($firebaseToken);
-                    $user->save();
-                    \Log::info('FCM token added successfully', ['user_id' => $user->id]);
+                    // Validate token format before proceeding
+                    if (!preg_match('/^[a-zA-Z0-9_\-:]+$/', $firebaseToken) || 
+                        strlen($firebaseToken) < 100 || 
+                        strlen($firebaseToken) > 500) {
+                        \Log::warning('Invalid FCM token format during login', [
+                            'user_id' => $user->id,
+                            'token_prefix' => substr($firebaseToken, 0, 10) . '...',
+                            'token_length' => strlen($firebaseToken)
+                        ]);
+                    } else {
+                        // Check rate limiting for token updates (5 attempts per minute)
+                        $rateLimitKey = 'fcm-update:' . $user->id;
+                        
+                        if (!RateLimiter::tooManyAttempts($rateLimitKey, 5)) {
+                            $user->addFcmToken($firebaseToken);
+                            $user->save();
+                            
+                            // Clear rate limiter on successful update
+                            RateLimiter::clear($rateLimitKey);
+                            \Log::info('FCM token added successfully', ['user_id' => $user->id]);
+                        } else {
+                            \Log::warning('Rate limit exceeded for FCM token updates', [
+                                'user_id' => $user->id,
+                                'attempts' => RateLimiter::attempts($rateLimitKey)
+                            ]);
+                        }
+                    }
                 } catch (\Exception $e) {
                     \Log::error('Failed to add FCM token: ' . $e->getMessage(), [
                         'user_id' => $user->id,
-                        'exception' => $e
+                        'exception' => $e,
+                        'trace' => $e->getTraceAsString()
                     ]);
                     // Continue with login even if FCM token fails
                 }
-            }    
+            }
             \Log::info('[FirebaseToken] Token added during login', [
                 'user_id' => $user->id,
                 'token_prefix' => substr($request->input('firebase_token'), 0, 10) . '...',

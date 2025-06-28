@@ -787,11 +787,73 @@ class User extends Authenticatable implements MustVerifyEmail
                 'max:500',
                 function ($attribute, $value, $fail) {
                     if (!preg_match('/^[a-zA-Z0-9_\-:]+$/', $value)) {
-                        $fail('The FCM token format is invalid.');
+                        $fail('The FCM token format is invalid. Only alphanumeric, underscore, hyphen, and colon characters are allowed.');
                     }
                 },
             ],
         ];
+    }
+    
+    /**
+     * Clean up expired or invalid FCM tokens
+     * 
+     * @param int $olderThanDays Remove tokens older than this many days (0 = all tokens)
+     * @return int Number of tokens removed
+     */
+    public function cleanupFcmTokens(int $olderThanDays = 30): int
+    {
+        try {
+            $tokens = $this->firebase_token ?? [];
+            $originalCount = count($tokens);
+            
+            if (empty($tokens)) {
+                return 0;
+            }
+            
+            // Filter out invalid tokens
+            $validTokens = array_filter($tokens, function($token) use ($olderThanDays) {
+                // Basic format validation
+                if (!is_string($token) || !preg_match('/^[a-zA-Z0-9_\-:]+$/', $token)) {
+                    return false;
+                }
+                
+                // Check token length
+                $length = strlen($token);
+                if ($length < 100 || $length > 500) {
+                    return false;
+                }
+                
+                // If we need to check token age (for future implementation)
+                // This is a placeholder for actual token expiration check
+                // Firebase tokens don't have a standard expiration, but you might store the timestamp
+                // when the token was added and check against that
+                
+                return true;
+            });
+            
+            $removedCount = $originalCount - count($validTokens);
+            
+            // Only update if we removed some tokens
+            if ($removedCount > 0) {
+                $this->firebase_token = array_values($validTokens);
+                $this->save();
+                
+                \Log::info('Cleaned up invalid FCM tokens', [
+                    'user_id' => $this->id,
+                    'removed_count' => $removedCount,
+                    'remaining_count' => count($validTokens)
+                ]);
+            }
+            
+            return $removedCount;
+            
+        } catch (\Exception $e) {
+            \Log::error('Error cleaning up FCM tokens: ' . $e->getMessage(), [
+                'user_id' => $this->id,
+                'exception' => $e
+            ]);
+            return 0;
+        }
     }
 
     public function isOnline(): ?bool

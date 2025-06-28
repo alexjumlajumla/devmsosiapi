@@ -158,11 +158,11 @@ info('this->userService->create($request->validated())',$result);
             }
 
 
-            // Strict FCM token format validation
-            if (!preg_match('/^[A-Za-z0-9_-]+:[A-Za-z0-9_-]+$/', $token)) {
+            // Strict FCM token format validation - aligned with User model rules
+            if (!preg_match('/^[a-zA-Z0-9_\-:]+$/', $token)) {
                 return response()->json([
                     'status' => false,
-                    'message' => 'Invalid Firebase Cloud Messaging token format'
+                    'message' => 'Invalid Firebase Cloud Messaging token format. Only alphanumeric, underscore, hyphen, and colon characters are allowed.'
                 ], 400);
             }
 
@@ -174,9 +174,31 @@ info('this->userService->create($request->validated())',$result);
                 ], 400);
             }
 
-            // Add token to user's tokens
-            $user->addFcmToken($token);
-            $user->save();
+            // Add token to user's tokens with rate limiting
+            try {
+                if (!RateLimiter::tooManyAttempts('firebase-token:' . $user->id, 5)) {
+                    $user->addFcmToken($token);
+                    $user->save();
+                    
+                    // Clear the rate limiter on successful save
+                    RateLimiter::clear('firebase-token:' . $user->id);
+                } else {
+                    return response()->json([
+                        'status' => false,
+                        'message' => 'Too many token update attempts. Please try again later.'
+                    ], 429);
+                }
+            } catch (\Exception $e) {
+                \Log::error('Failed to add FCM token: ' . $e->getMessage(), [
+                    'user_id' => $user->id,
+                    'exception' => $e
+                ]);
+                
+                return response()->json([
+                    'status' => false,
+                    'message' => 'Failed to update token. Please try again.'
+                ], 500);
+            }
 
             \Log::info('[FirebaseToken] Token updated successfully', [
                 'user_id' => $user->id,
