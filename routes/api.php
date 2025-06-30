@@ -3,6 +3,8 @@
 use App\Http\Controllers\API\v1\{GalleryController, PushNotificationController, Rest};
 use App\Http\Controllers\API\v1\Auth\{LoginController, RegisterController, VerifyAuthController};
 use App\Http\Controllers\API\v1\Dashboard\{Admin, Cook, Deliveryman, Payment, Seller, User, Waiter};
+use App\Http\Controllers\API\v1\{TestController};
+use App\Http\Controllers\API\v1\User\{FcmTokenController};
 use App\Http\Controllers\Web\TelegramBotController;
 use App\Models\Page;
 use Illuminate\Support\Facades\Route;
@@ -1987,6 +1989,32 @@ Route::prefix('v1')->group(function () {
             // Clear all FCM tokens for the current user
             Route::delete('clear', [FcmTokenController::class, 'clear'])
                 ->name('clear');
+        });
+
+    // FCM Test and Debug Routes
+    Route::prefix('test')
+        ->middleware(['auth:sanctum'])
+        ->name('test.')
+        ->group(function () {
+            // Send test notification to authenticated user
+            Route::post('send-notification', [TestController::class, 'sendTestNotification'])
+                ->name('send-notification');
+                
+            // Get FCM token status for authenticated user
+            Route::get('token-status', [TestController::class, 'getTokenStatus'])
+                ->name('token-status');
+                
+            // Manually register an FCM token for testing
+            Route::post('register-token', [TestController::class, 'registerTestToken'])
+                ->name('register-token');
+                
+            // Clear all FCM tokens for authenticated user
+            Route::post('clear-tokens', [TestController::class, 'clearTokens'])
+                ->name('clear-tokens');
+                
+            // Get system FCM configuration status
+            Route::get('system-status', [TestController::class, 'getSystemStatus'])
+                ->name('system-status');
         });
 
     // Admin FCM management (for admin dashboard)

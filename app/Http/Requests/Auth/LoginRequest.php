@@ -13,9 +13,10 @@ class LoginRequest extends BaseRequest
     public function rules(): array
 	{
 		return [
-            'phone'     => ['numeric', 'exists:users,phone'],
+            'phone'     => ['nullable', 'numeric'],
             'password'  => ['required', 'string'],
-            'email'     => ['email', 'exists:users,email'],
+            'email'     => ['nullable', 'email'],
+            'firebase_token' => ['nullable', 'string'],
 		];
 	}
 }
